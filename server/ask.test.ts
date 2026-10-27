@@ -27,7 +27,7 @@ test("returns result, surfaces claude errors from stdout", async () => {
 });
 
 test("model flag only for a non-default model", () => {
-  assert.ok(!claudeArgs("default").includes("--model"));
+  assert.ok(!claudeArgs().includes("--model"));
   assert.deepEqual(claudeArgs("opus").slice(-2), ["--model", "opus"]);
 });
 

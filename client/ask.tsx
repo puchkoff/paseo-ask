@@ -1,31 +1,46 @@
-import { type PluginHostProps, useRpc } from "@getpaseo/plugin/client";
+import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client";
 import { Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { askPoll, askStart, MODELS, type Model, type Turn } from "../shared/ask.ts";
+import { askPoll, askStart, claudeModelOf, type Turn } from "../shared/ask.ts";
+import { load, save } from "./web.ts";
+import { FloatingWindow } from "./window.tsx";
 
 // Module-level so the thread, settings and a running request survive closing the window,
 // and the composer pill can open it.
-// shortcut: lost on app reload, persist via plugin settings if that matters.
-type State = { open: boolean; turns: Turn[]; pending: boolean; error: string | null; fontSize: number; model: Model };
-let state: State = { open: false, turns: [], pending: false, error: null, fontSize: 17, model: "default" };
+// Font size is also saved per app (web/desktop only); the thread lasts until reload.
+// agentId: the agent whose composer pill opened the window; Ask uses its model.
+type State = { open: boolean; agentId: string | null; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
+const PREFS_KEY = "paseo-floating-window:prefs";
+const prefs = load(PREFS_KEY, { fontSize: 20 });
+let state: State = { open: false, agentId: null, turns: [], pending: false, error: null, ...prefs };
 const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
+  if ("fontSize" in patch) save(PREFS_KEY, { fontSize: state.fontSize });
   for (const l of listeners) l();
 }
 const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.delete(l));
 const useAskState = () => useSyncExternalStore(subscribe, () => state);
 
 export const setAskOpen = (open: boolean) => set({ open });
+export const openAsk = (agentId: string | null) => set({ open: true, agentId });
 
 const FONT_MIN = 12;
-const FONT_MAX = 32;
+const FONT_MAX = 40;
 const POLL_MS = 1500;
 
-// Mount once, outside any Pressable: the desktop modal is a React portal, so its events bubble up the React tree.
+// Mount once, outside any Pressable: modals are React portals, so their events bubble up the React tree.
+// Desktop gets a resizable window; compact layouts the host's bottom sheet.
 export function AskModal(props: PluginHostProps) {
   const { open } = useAskState();
+  if (!props.layout.compact) {
+    return open ? (
+      <FloatingWindow theme={props.theme} title="Ask" onClose={() => setAskOpen(false)}>
+        <AskBody {...props} />
+      </FloatingWindow>
+    ) : null;
+  }
   return (
     <Modal title="Ask" open={open} onOpenChange={setAskOpen}>
       <Modal.Content scrollable={false} contentContainerStyle={{ flex: 1, padding: 16, gap: 10 }}>
@@ -38,7 +53,9 @@ export function AskModal(props: PluginHostProps) {
 function AskBody({ theme }: PluginHostProps) {
   const start = useRpc(askStart);
   const poll = useRpc(askPoll);
-  const { turns, pending, error, fontSize, model } = useAskState();
+  const { turns, pending, error, fontSize, agentId } = useAskState();
+  // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
+  const model = useAgent(agentId ?? "", claudeModelOf) ?? undefined;
   const [draft, setDraft] = useState("");
   const scroll = useRef<NativeScrollView>(null);
 
@@ -49,7 +66,7 @@ function AskBody({ theme }: PluginHostProps) {
     set({ turns: next, pending: true, error: null });
     setDraft("");
     try {
-      const { jobId } = await start({ turns: next, model: state.model });
+      const { jobId } = await start({ turns: next, model });
       for (;;) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         const job = await poll({ jobId });
@@ -66,7 +83,8 @@ function AskBody({ theme }: PluginHostProps) {
   }
 
   const c = theme.colors;
-  const small = Math.max(12, fontSize - 3);
+  // Toolbar stays fixed size; only the conversation follows A−/A+.
+  const small = 14;
   const s = useMemo(
     () => ({
       root: { flex: 1, gap: 10 },
@@ -84,7 +102,7 @@ function AskBody({ theme }: PluginHostProps) {
       userText: { color: c.accentForeground, fontSize, lineHeight: Math.round(fontSize * 1.4) },
       bot: { alignSelf: "flex-start" as const, backgroundColor: c.surface2 },
       botText: { color: c.foreground, fontSize, lineHeight: Math.round(fontSize * 1.4) },
-      hint: { color: c.foregroundMuted, fontSize: small },
+      hint: { color: c.foregroundMuted, fontSize },
       error: { color: c.statusDanger, fontSize: small },
       row: { flexDirection: "row" as const, gap: 8, alignItems: "flex-end" as const },
       input: {
@@ -99,10 +117,10 @@ function AskBody({ theme }: PluginHostProps) {
         color: c.foreground,
         fontSize,
       },
-      send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, opacity: pending ? 0.5 : 1 },
-      sendText: { color: c.accentForeground, fontSize, fontWeight: "600" as const },
+      send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 11, opacity: pending ? 0.5 : 1 },
+      sendText: { color: c.accentForeground, fontSize: 15, fontWeight: "600" as const },
     }),
-    [c, pending, fontSize, small],
+    [c, pending, fontSize],
   );
 
   const chip = (label: string, on: boolean, onPress: () => void, a11y: string, disabled = false) => (
@@ -114,7 +132,7 @@ function AskBody({ theme }: PluginHostProps) {
   return (
     <View style={s.root}>
       <View style={s.bar}>
-        {MODELS.map((m) => chip(m, m === model, () => set({ model: m }), `Model ${m}`))}
+        <Text style={s.link}>{model ?? "default model"}</Text>
         <View style={s.spacer} />
         {chip("A−", false, () => set({ fontSize: fontSize - 1 }), "Smaller text", fontSize <= FONT_MIN)}
         {chip("A+", false, () => set({ fontSize: fontSize + 1 }), "Bigger text", fontSize >= FONT_MAX)}

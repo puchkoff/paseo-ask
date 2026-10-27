@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { Model, Turn } from "../shared/ask.ts";
+import type { Turn } from "../shared/ask.ts";
 import { CommandError, type RunCommand } from "./exec.ts";
 
 // Web research and tool runs take minutes.
@@ -9,7 +9,7 @@ const SYSTEM_PROMPT =
 
 // Full tooling with the user's settings and MCP servers, no permission prompts (nobody can answer them).
 // No saved session: the thread is resent each turn.
-export function claudeArgs(model: Model): string[] {
+export function claudeArgs(model?: string): string[] {
   return [
     "-p",
     "--no-session-persistence",
@@ -19,7 +19,7 @@ export function claudeArgs(model: Model): string[] {
     SYSTEM_PROMPT,
     "--output-format",
     "json",
-    ...(model === "default" ? [] : ["--model", model]),
+    ...(model ? ["--model", model] : []),
   ];
 }
 
@@ -30,7 +30,7 @@ export function transcript(turns: Turn[]): string {
 }
 
 export function createAsk(run: RunCommand, claude: string) {
-  return async ({ turns, model = "default" }: { turns: Turn[]; model?: Model }) => {
+  return async ({ turns, model }: { turns: Turn[]; model?: string }) => {
     let stdout: string;
     try {
       // Thinking off: the CLI's default thinking makes headless calls ~30x slower.
@@ -56,7 +56,7 @@ export function createJobs(answer: ReturnType<typeof createAsk>) {
   const jobs = new Map<string, Job>();
   let next = 0;
   return {
-    start(input: { turns: Turn[]; model?: Model }) {
+    start(input: { turns: Turn[]; model?: string }) {
       const jobId = `${Date.now()}-${next++}`;
       jobs.set(jobId, { status: "running" });
       answer(input).then(
