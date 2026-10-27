@@ -12,8 +12,12 @@ import { FloatingWindow } from "./window.tsx";
 // Font size is also saved per app (web/desktop only); the thread lasts until reload.
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
 type State = { open: boolean; agentId: string | null; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
-const PREFS_KEY = "paseo-floating-window:prefs";
-const prefs = load(PREFS_KEY, { fontSize: 20 });
+// Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
+// zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
+const BASE = 15;
+// v2: v1 saved the old default of 20.
+const PREFS_KEY = "paseo-floating-window:prefs-v2";
+const prefs = load(PREFS_KEY, { fontSize: BASE });
 let state: State = { open: false, agentId: null, turns: [], pending: false, error: null, ...prefs };
 const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
@@ -29,8 +33,6 @@ export const openAsk = (agentId: string | null) => set({ open: true, agentId });
 
 const FONT_MIN = 12;
 const FONT_MAX = 40;
-// Thread text is drawn at BASE and zoomed to fontSize (desktop only): host Markdown takes no font size.
-const BASE = 15;
 const THREAD_ID = "paseo-floating-window-thread";
 const POLL_MS = 1500;
 
