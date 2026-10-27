@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { Turn } from "../shared/ask.ts";
+import type { Effort, Turn } from "../shared/ask.ts";
 import { CommandError, type RunCommand } from "./exec.ts";
 
 // Web research and tool runs take minutes.
@@ -7,15 +7,13 @@ const TIMEOUT_MS = 600_000;
 const SYSTEM_PROMPT =
   "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Answers render as Markdown, tables included.";
 
-// Full tooling and MCP servers, no permission prompts (nobody can answer them).
-// No user settings: hooks, plugins, skills and CLAUDE.md tripled the context (17k -> 49k tokens) and added ~2 s.
+// Same setup as an agent in the main window: user settings, skills, plugins, MCP and full tooling,
+// with no permission prompts (nobody can answer them). Costs ~2 s per question over a bare call.
 // No saved session: the thread is resent each turn.
-export function claudeArgs(model?: string): string[] {
+export function claudeArgs(model?: string, effort?: Effort): string[] {
   return [
     "-p",
     "--no-session-persistence",
-    "--setting-sources",
-    "",
     "--permission-mode",
     "bypassPermissions",
     "--append-system-prompt",
@@ -23,6 +21,7 @@ export function claudeArgs(model?: string): string[] {
     "--output-format",
     "json",
     ...(model ? ["--model", model] : []),
+    ...(effort ? ["--effort", effort] : []),
   ];
 }
 
@@ -33,15 +32,15 @@ export function transcript(turns: Turn[]): string {
 }
 
 export function createAsk(run: RunCommand, claude: string) {
-  return async ({ turns, model }: { turns: Turn[]; model?: string }) => {
+  return async ({ turns, model, effort }: { turns: Turn[]; model?: string; effort?: Effort }) => {
     let stdout: string;
     try {
-      // Thinking off: the CLI's default thinking makes headless calls ~30x slower.
-      stdout = await run(claude, claudeArgs(model), {
+      // Without the agent's effort, thinking is off: the CLI default makes headless calls ~30x slower.
+      stdout = await run(claude, claudeArgs(model, effort), {
         timeoutMs: TIMEOUT_MS,
         input: transcript(turns),
         cwd: os.homedir(),
-        env: { ...process.env, MAX_THINKING_TOKENS: "0" },
+        env: effort ? process.env : { ...process.env, MAX_THINKING_TOKENS: "0" },
       });
     } catch (err) {
       if (err instanceof CommandError && err.stdout) stdout = err.stdout;
@@ -59,7 +58,7 @@ export function createJobs(answer: ReturnType<typeof createAsk>) {
   const jobs = new Map<string, Job>();
   let next = 0;
   return {
-    start(input: { turns: Turn[]; model?: string }) {
+    start(input: { turns: Turn[]; model?: string; effort?: Effort }) {
       const jobId = `${Date.now()}-${next++}`;
       jobs.set(jobId, { status: "running" });
       answer(input).then(

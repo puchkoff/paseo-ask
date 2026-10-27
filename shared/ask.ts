@@ -8,10 +8,13 @@ export type Turn = z.infer<typeof turn>;
 // No leading "-", so it can never be read as a CLI flag.
 export const model = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$/).max(100);
 
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 // Start + poll: the app times plugin RPCs out after 60 s, and tool-using answers take minutes.
 export const askStart = defineRpc({
   name: "ask.start",
-  input: z.object({ turns: z.array(turn).min(1).max(100), model: model.optional() }),
+  input: z.object({ turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
   output: z.object({ jobId: z.string() }),
 });
 
@@ -27,4 +30,10 @@ export function claudeModelOf(agent: { provider: string; model: string | null })
   if (name !== "claude") return undefined;
   const id = agent.model ?? fromProvider;
   return id && model.safeParse(id).success ? id : undefined;
+}
+
+// The agent's thinking option, when it is a `claude --effort` level.
+export function claudeEffortOf(agent: { provider: string; thinkingOptionId: string | null }): Effort | undefined {
+  const id = agent.thinkingOptionId;
+  return agent.provider.split("/")[0] === "claude" && (EFFORTS as readonly string[]).includes(id ?? "") ? (id as Effort) : undefined;
 }

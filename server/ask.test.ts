@@ -39,3 +39,9 @@ test("job runs in the background and is handed out once", async () => {
   assert.deepEqual(jobs.poll({ jobId }), { status: "done", answer: "hi" });
   assert.equal(jobs.poll({ jobId }).status, "error");
 });
+
+test("effort flag passed through, settings not skipped", () => {
+  const args = claudeArgs("claude-opus-5-5", "high");
+  assert.deepEqual(args.slice(-4), ["--model", "claude-opus-5-5", "--effort", "high"]);
+  assert.ok(!args.includes("--setting-sources"));
+});

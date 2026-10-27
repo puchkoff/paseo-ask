@@ -2,7 +2,7 @@ import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client"
 import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { askPoll, askStart, claudeModelOf, type Turn } from "../shared/ask.ts";
+import { askPoll, askStart, claudeEffortOf, claudeModelOf, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
 import { load, save, setZoom } from "./web.ts";
 import { FloatingWindow } from "./window.tsx";
@@ -52,7 +52,9 @@ function AskBody({ theme }: PluginHostProps) {
   const poll = useRpc(askPoll);
   const { turns, pending, error, fontSize, agentId } = useAskState();
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
-  const model = useAgent(agentId ?? "", claudeModelOf) ?? undefined;
+  const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
+  const model = agent?.model;
+  const effort = agent?.effort;
   const [draft, setDraft] = useState("");
   const scroll = useRef<NativeScrollView>(null);
   useEffect(() => setZoom(THREAD_ID, fontSize / BASE), [fontSize]);
@@ -64,7 +66,7 @@ function AskBody({ theme }: PluginHostProps) {
     set({ turns: next, pending: true, error: null });
     setDraft("");
     try {
-      const { jobId } = await start({ turns: next, model });
+      const { jobId } = await start({ turns: next, model, effort });
       for (;;) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         const job = await poll({ jobId });
@@ -134,7 +136,7 @@ function AskBody({ theme }: PluginHostProps) {
   return (
     <View style={s.root}>
       <View style={s.bar}>
-        <Text style={s.link}>{model ?? "default model"}</Text>
+        <Text style={s.link}>{[model ?? "default model", effort].filter(Boolean).join(" · ")}</Text>
         <View style={s.spacer} />
         {chip("A−", false, () => set({ fontSize: fontSize - 1 }), "Smaller text", fontSize <= FONT_MIN)}
         {chip("A+", false, () => set({ fontSize: fontSize + 1 }), "Bigger text", fontSize >= FONT_MAX)}
