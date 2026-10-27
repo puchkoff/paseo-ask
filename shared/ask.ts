@@ -1,7 +1,10 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
-export const turn = z.object({ role: z.enum(["user", "assistant"]), text: z.string() });
+// files: daemon paths returned by ask.upload; Claude reads them with its tools.
+export const file = z.object({ name: z.string().max(255), path: z.string().max(1000) });
+export const turn = z.object({ role: z.enum(["user", "assistant"]), text: z.string(), files: z.array(file).max(20).optional() });
+export type AskFile = z.infer<typeof file>;
 export type Turn = z.infer<typeof turn>;
 
 // A Claude model id or alias (e.g. "claude-opus-5-5", "opus[1m]"); omitted means the user's default.
@@ -16,6 +19,14 @@ export const askStart = defineRpc({
   name: "ask.start",
   input: z.object({ turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
   output: z.object({ jobId: z.string() }),
+});
+
+// ~20 MB per file as base64; websocket messages cap at 100 MB.
+export const MAX_FILE_BASE64 = 28_000_000;
+export const askUpload = defineRpc({
+  name: "ask.upload",
+  input: z.object({ name: z.string().min(1).max(255), data: z.string().max(MAX_FILE_BASE64) }),
+  output: file,
 });
 
 export const askPoll = defineRpc({

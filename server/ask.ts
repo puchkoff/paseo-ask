@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { Effort, Turn } from "../shared/ask.ts";
 import { CommandError, type RunCommand } from "./exec.ts";
 
@@ -25,10 +28,26 @@ export function claudeArgs(model?: string, effort?: Effort): string[] {
   ];
 }
 
+function withFiles(t: Turn): string {
+  if (!t.files?.length) return t.text;
+  return `${t.text}\n\n[Attached files, read them with your tools:\n${t.files.map((f) => `- ${f.path}`).join("\n")}]`;
+}
+
 export function transcript(turns: Turn[]): string {
-  if (turns.length === 1) return turns[0].text;
-  const history = turns.slice(0, -1).map((t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`);
-  return `Conversation so far:\n\n${history.join("\n\n")}\n\nAnswer the latest question:\n\n${turns[turns.length - 1].text}`;
+  if (turns.length === 1) return withFiles(turns[0]);
+  const history = turns.slice(0, -1).map((t) => `${t.role === "user" ? "User" : "Assistant"}: ${withFiles(t)}`);
+  return `Conversation so far:\n\n${history.join("\n\n")}\n\nAnswer the latest question:\n\n${withFiles(turns[turns.length - 1])}`;
+}
+
+// shortcut: files stay in the OS temp dir until it is cleaned; add expiry if they pile up.
+export async function saveUpload({ name, data }: { name: string; data: string }, root = path.join(os.tmpdir(), "paseo-ask")) {
+  const dir = path.join(root, randomUUID());
+  await mkdir(dir, { recursive: true });
+  // basename + safe charset: the name comes from the client and must not escape dir.
+  const safe = path.basename(name).replace(/[^\p{L}\p{N}._ -]/gu, "_").replace(/^\.+/, "") || "file";
+  const file = path.join(dir, safe);
+  await writeFile(file, Buffer.from(data, "base64"));
+  return { name: safe, path: file };
 }
 
 export function createAsk(run: RunCommand, claude: string) {

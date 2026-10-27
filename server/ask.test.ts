@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { claudeArgs, createAsk, createJobs, transcript } from "./ask.ts";
+import { readFile, rm } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { claudeArgs, createAsk, createJobs, saveUpload, transcript } from "./ask.ts";
 import { CommandError } from "./exec.ts";
 
 test("single question is sent as-is", () => {
@@ -44,4 +47,20 @@ test("effort flag passed through, settings not skipped", () => {
   const args = claudeArgs("claude-opus-5-5", "high");
   assert.deepEqual(args.slice(-4), ["--model", "claude-opus-5-5", "--effort", "high"]);
   assert.ok(!args.includes("--setting-sources"));
+});
+
+test("files are listed under their turn", () => {
+  const t = transcript([{ role: "user", text: "what is this", files: [{ name: "a.png", path: "/tmp/x/a.png" }] }]);
+  assert.match(t, /what is this\n\n\[Attached files.*\n- \/tmp\/x\/a\.png\]/s);
+});
+
+test("upload stays inside its dir and keeps the bytes", async () => {
+  const root = path.join(os.tmpdir(), `paseo-ask-test-${process.pid}`);
+  const f = await saveUpload({ name: "../../etc/passwd", data: Buffer.from("hi").toString("base64") }, root);
+  assert.ok(f.path.startsWith(root + path.sep));
+  assert.equal(f.name, "passwd");
+  assert.equal(await readFile(f.path, "utf8"), "hi");
+  const dot = await saveUpload({ name: "..", data: "" }, root);
+  assert.equal(dot.name, "file");
+  await rm(root, { recursive: true });
 });

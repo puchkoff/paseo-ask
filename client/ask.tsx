@@ -1,10 +1,10 @@
 import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client";
 import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { askPoll, askStart, claudeEffortOf, claudeModelOf, type Turn } from "../shared/ask.ts";
+import { ActivityIndicator, Image, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
+import { type AskFile, askPoll, askStart, askUpload, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
-import { load, save, setZoom } from "./web.ts";
+import { load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { FloatingWindow } from "./window.tsx";
 
 // Module-level so the thread, settings and a running request survive closing the window,
@@ -47,9 +47,37 @@ export function AskModal(props: PluginHostProps) {
   ) : null;
 }
 
+// Image previews by daemon path; the daemon only gets bytes once, at upload.
+const previews = new Map<string, string>();
+
 function AskBody({ theme }: PluginHostProps) {
   const start = useRpc(askStart);
   const poll = useRpc(askPoll);
+  const upload = useRpc(askUpload);
+  const [files, setFiles] = useState<AskFile[]>([]);
+  const [uploading, setUploading] = useState(0);
+
+  async function attach(picked: Promise<PickedFile[]>) {
+    try {
+      const list = await picked;
+      setUploading((n) => n + list.length);
+      for (const f of list) {
+        try {
+          if (f.data.length > MAX_FILE_BASE64) throw new Error(`${f.name} is over 20 MB`);
+          const saved = await upload({ name: f.name, data: f.data });
+          if (f.type.startsWith("image/")) previews.set(saved.path, f.dataUrl);
+          setFiles((prev) => [...prev, saved]);
+        } catch (err) {
+          set({ error: err instanceof Error ? err.message : String(err) });
+        } finally {
+          setUploading((n) => n - 1);
+        }
+      }
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
   const { turns, pending, error, fontSize, agentId } = useAskState();
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
@@ -61,10 +89,11 @@ function AskBody({ theme }: PluginHostProps) {
 
   async function send() {
     const text = draft.trim();
-    if (!text || state.pending) return;
-    const next: Turn[] = [...state.turns, { role: "user", text }];
+    if ((!text && !files.length) || state.pending || uploading) return;
+    const next: Turn[] = [...state.turns, { role: "user", text, ...(files.length ? { files } : {}) }];
     set({ turns: next, pending: true, error: null });
     setDraft("");
+    setFiles([]);
     try {
       const { jobId } = await start({ turns: next, model, effort });
       for (;;) {
@@ -107,6 +136,12 @@ function AskBody({ theme }: PluginHostProps) {
         padding: 16,
       },
       bot: { alignSelf: "stretch" as const },
+      files: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8, alignItems: "center" as const },
+      fileChip: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 4, backgroundColor: c.surface1 },
+      thumb: { width: 72, height: 72, borderRadius: 6 },
+      fileName: { color: c.foreground, fontSize: 13, maxWidth: 220 },
+      attach: { paddingHorizontal: 6, paddingVertical: 10 },
+      attachText: { fontSize: 18 },
       error: { color: c.statusDanger, fontSize: small },
       row: { flexDirection: "row" as const, gap: 8, alignItems: "flex-end" as const },
       input: {
@@ -127,6 +162,20 @@ function AskBody({ theme }: PluginHostProps) {
     [c, pending, fontSize],
   );
 
+  const fileChip = (f: AskFile, onRemove?: () => void) => {
+    const preview = previews.get(f.path);
+    return (
+      <View key={f.path} style={s.fileChip}>
+        {preview ? <Image source={{ uri: preview }} style={s.thumb} accessibilityLabel={f.name} /> : <Text style={s.fileName} numberOfLines={1}>📄 {f.name}</Text>}
+        {onRemove ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${f.name}`} onPress={onRemove} hitSlop={6}>
+            <Text style={s.fileName}>✕</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  };
+
   const chip = (label: string, on: boolean, onPress: () => void, a11y: string, disabled = false) => (
     <Pressable key={label} accessibilityRole="button" accessibilityLabel={a11y} accessibilityState={{ selected: on, disabled }} disabled={disabled} onPress={onPress} style={[s.chip, on ? s.chipOn : null, disabled ? { opacity: 0.4 } : null]}>
       <Text style={on ? s.chipTextOn : s.chipText}>{label}</Text>
@@ -146,14 +195,26 @@ function AskBody({ theme }: PluginHostProps) {
         <View nativeID={THREAD_ID} style={s.listContent}>
         {turns.map((t, i) => (
           <View key={i} style={t.role === "user" ? s.user : s.bot}>
-            <Markdown>{t.text}</Markdown>
+            {t.text ? <Markdown>{t.text}</Markdown> : null}
+            {t.files?.length ? <View style={s.files}>{t.files.map((f) => fileChip(f))}</View> : null}
           </View>
         ))}
         {pending ? <ActivityIndicator color={c.foregroundMuted} style={{ alignSelf: "flex-start" }} /> : null}
         {error ? <Text style={s.error}>{error}</Text> : null}
         </View>
       </ScrollView>
+      {files.length || uploading ? (
+        <View style={s.files}>
+          {files.map((f) => fileChip(f, () => setFiles((prev) => prev.filter((x) => x.path !== f.path))))}
+          {uploading ? <ActivityIndicator color={c.foregroundMuted} /> : null}
+        </View>
+      ) : null}
       <View style={s.row}>
+        {Platform.OS === "web" ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Attach files" onPress={() => pickFiles((picked) => void attach(picked))} style={s.attach}>
+            <Text style={s.attachText}>📎</Text>
+          </Pressable>
+        ) : null}
         <TextInput
           style={s.input}
           value={draft}
