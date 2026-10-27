@@ -98,6 +98,19 @@ function DesktopWindow({ theme, title, onClose, children }: Props) {
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderColor: c.border, cursor: "move" } as unknown as ViewStyle}
           >
             <Text style={{ flex: 1, color: c.foreground, fontSize: 15, fontWeight: "600" }}>{title}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Reset window size and position"
+              onPress={() => {
+                const r = clamp(initialRect());
+                setRect(r);
+                save(KEY, r);
+              }}
+              hitSlop={8}
+              style={{ marginRight: 16 }}
+            >
+              <Text style={{ color: c.foregroundMuted, fontSize: 14 }}>Reset</Text>
+            </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} hitSlop={8}>
               <Text style={{ color: c.foregroundMuted, fontSize: 18 }}>✕</Text>
             </Pressable>
