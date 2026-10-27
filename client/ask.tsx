@@ -1,18 +1,38 @@
-import { type PluginPopoverProps, useRpc } from "@getpaseo/plugin/client";
-import { useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { type PluginHostProps, useRpc } from "@getpaseo/plugin/client";
+import { Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { ask, type Turn } from "../shared/ask.ts";
 
-// Module-level so the thread survives closing and reopening the popover.
+// Module-level so the thread survives closing the window, and the composer pill can open it.
 let saved: Turn[] = [];
+let open = false;
+const listeners = new Set<() => void>();
+export function setAskOpen(next: boolean) {
+  open = next;
+  for (const l of listeners) l();
+}
+const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.delete(l));
 
-export function AskWindow({ theme, layout, close }: PluginPopoverProps) {
+// Mount once, outside any Pressable: the desktop modal is a React portal, so its events bubble up the React tree.
+export function AskModal(props: PluginHostProps) {
+  const isOpen = useSyncExternalStore(subscribe, () => open);
+  return (
+    <Modal title="Ask" open={isOpen} onOpenChange={setAskOpen}>
+      <Modal.Content scrollable={false} contentContainerStyle={{ flex: 1, padding: 16, gap: 8 }}>
+        {isOpen ? <AskBody {...props} /> : null}
+      </Modal.Content>
+    </Modal>
+  );
+}
+
+function AskBody({ theme }: PluginHostProps) {
   const askRpc = useRpc(ask);
   const [turns, setTurnsState] = useState<Turn[]>(saved);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const scroll = useRef<ScrollView>(null);
+  const scroll = useRef<NativeScrollView>(null);
 
   const setTurns = (next: Turn[]) => {
     saved = next;
@@ -40,15 +60,8 @@ export function AskWindow({ theme, layout, close }: PluginPopoverProps) {
   const c = theme.colors;
   const s = useMemo(
     () => ({
-      root: {
-        width: layout.compact ? undefined : 440,
-        height: layout.compact ? 480 : 520,
-        backgroundColor: c.surface0,
-        padding: 12,
-        gap: 8,
-      },
+      root: { flex: 1, gap: 8 },
       header: { flexDirection: "row" as const, justifyContent: "space-between" as const, alignItems: "center" as const },
-      title: { color: c.foreground, fontSize: 15, fontWeight: "600" as const },
       link: { color: c.foregroundMuted, fontSize: 13 },
       list: { flex: 1 },
       listContent: { gap: 8, paddingBottom: 4 },
@@ -75,23 +88,18 @@ export function AskWindow({ theme, layout, close }: PluginPopoverProps) {
       send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, opacity: pending ? 0.5 : 1 },
       sendText: { color: c.accentForeground, fontSize: 14, fontWeight: "600" as const },
     }),
-    [c, layout.compact, pending],
+    [c, pending],
   );
 
   return (
     <View style={s.root}>
       <View style={s.header}>
-        <Text style={s.title}>Ask</Text>
-        <View style={{ flexDirection: "row", gap: 14 }}>
-          {turns.length > 0 && !pending ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="Clear conversation" onPress={() => { setTurns([]); setError(null); }}>
-              <Text style={s.link}>Clear</Text>
-            </Pressable>
-          ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={close}>
-            <Text style={s.link}>Close</Text>
+        <Text style={s.link}>Answers by Claude on the daemon</Text>
+        {turns.length > 0 && !pending ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Clear conversation" onPress={() => { setTurns([]); setError(null); }}>
+            <Text style={s.link}>Clear</Text>
           </Pressable>
-        </View>
+        ) : null}
       </View>
       <ScrollView ref={scroll} style={s.list} contentContainerStyle={s.listContent} onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}>
         {turns.length === 0 ? <Text style={s.hint}>Ask anything. Enter sends, Shift+Enter adds a line.</Text> : null}
