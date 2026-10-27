@@ -1,3 +1,5 @@
-Adds an "Ask" row to the sidebar footer. It opens a floating window (a bottom sheet on phones) where you type a question and get an answer, with follow-ups in the same thread.
+Adds an "Ask" row to the sidebar footer and an "Ask" button to each agent's composer. Either opens a floating window (a bottom sheet on phones) where you type a question and get an answer, with follow-ups in the same thread.
 
 Answers come from the Claude Code CLI (`claude -p`) on the daemon machine, so `claude` must be installed and logged in there. It runs like an agent in the main window: your Claude Code settings, skills, plugins and MCP servers, full tool access without permission prompts (`bypassPermissions`), in your home directory: it can search the web, read and change files and run commands. It uses the same Claude model and effort as the agent whose composer opened it; from the sidebar, or for a non-Claude agent, your Claude Code default. On desktop the window can be moved and resized, and its size, position and text size are remembered.
+
+Your questions, the thread and any files or tool results Claude reads are sent to Anthropic through your Claude Code login. The thread lives only in the app until you reload it.

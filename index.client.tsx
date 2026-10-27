@@ -55,7 +55,7 @@ export default function contribute(client: PluginClientContext) {
       return undefined;
     })
     .catch((error) => {
-      if (!lifetime.signal.aborted) console.error("[paseo-floating-window] agent observation failed", error);
+      if (!lifetime.signal.aborted) console.error("[paseo-ask] agent observation failed", error);
     });
   return () => {
     lifetime.abort();

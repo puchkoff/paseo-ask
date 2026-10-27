@@ -64,7 +64,7 @@ export function createJobs(answer: ReturnType<typeof createAsk>) {
       answer(input).then(
         ({ answer }) => jobs.set(jobId, { status: "done", answer }),
         (err) => {
-          console.error("[paseo-floating-window] ask failed:", err);
+          console.error("[paseo-ask] ask failed:", err);
           jobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) });
         },
       );

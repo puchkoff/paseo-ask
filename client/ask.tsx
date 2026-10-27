@@ -16,7 +16,7 @@ type State = { open: boolean; agentId: string | null; turns: Turn[]; pending: bo
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
 const BASE = 15;
 // v2: v1 saved the old default of 20.
-const PREFS_KEY = "paseo-floating-window:prefs-v2";
+const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
 let state: State = { open: false, agentId: null, turns: [], pending: false, error: null, ...prefs };
 const listeners = new Set<() => void>();
@@ -33,7 +33,7 @@ export const openAsk = (agentId: string | null) => set({ open: true, agentId });
 
 const FONT_MIN = 12;
 const FONT_MAX = 40;
-const THREAD_ID = "paseo-floating-window-thread";
+const THREAD_ID = "paseo-ask-thread";
 const POLL_MS = 500;
 
 // Mount once, outside any Pressable: modals are React portals, so their events bubble up the React tree.

@@ -4,7 +4,7 @@ import { Dimensions, type GestureResponderEvent, KeyboardAvoidingView, Modal, Pl
 import { followPointer, load, save } from "./web.ts";
 
 type Rect = { x: number; y: number; w: number; h: number };
-const KEY = "paseo-floating-window:rect";
+const KEY = "paseo-ask:rect";
 const MIN_W = 360;
 const MIN_H = 300;
 
