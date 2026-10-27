@@ -3,6 +3,7 @@ import { Markdown, Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { askPoll, askStart, claudeModelOf, type Turn } from "../shared/ask.ts";
+import { mixHex } from "../shared/color.ts";
 import { load, save, setZoom } from "./web.ts";
 import { FloatingWindow } from "./window.tsx";
 
@@ -100,11 +101,17 @@ function AskBody({ theme }: PluginHostProps) {
       spacer: { flex: 1 },
       link: { color: c.foregroundMuted, fontSize: small },
       list: { flex: 1 },
-      listContent: { gap: 10, paddingBottom: 4 },
-      bubble: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, maxWidth: "92%" as const },
-      user: { alignSelf: "flex-end" as const, backgroundColor: c.accent },
-      userText: { color: c.accentForeground, fontSize: BASE, lineHeight: Math.round(BASE * 1.4) },
-      bot: { alignSelf: "stretch" as const, backgroundColor: c.surface2 },
+      listContent: { gap: 16, paddingBottom: 4 },
+      // Same look as Paseo's main chat: user turns in a surface3 bubble, answers unboxed, both host Markdown.
+      user: {
+        alignSelf: "flex-end" as const,
+        maxWidth: "85%" as const,
+        backgroundColor: mixHex(c.surface2, c.foreground, 0.09),
+        borderRadius: 16,
+        borderTopRightRadius: 2,
+        padding: 16,
+      },
+      bot: { alignSelf: "stretch" as const },
       hint: { color: c.foregroundMuted, fontSize: BASE },
       error: { color: c.statusDanger, fontSize: small },
       row: { flexDirection: "row" as const, gap: 8, alignItems: "flex-end" as const },
@@ -145,8 +152,8 @@ function AskBody({ theme }: PluginHostProps) {
         <View nativeID={THREAD_ID} style={s.listContent}>
         {turns.length === 0 ? <Text style={s.hint}>Ask anything; Claude can search the web and use tools. Enter sends, Shift+Enter adds a line.</Text> : null}
         {turns.map((t, i) => (
-          <View key={i} style={[s.bubble, t.role === "user" ? s.user : s.bot]}>
-            {t.role === "user" ? <Text selectable style={s.userText}>{t.text}</Text> : <Markdown>{t.text}</Markdown>}
+          <View key={i} style={t.role === "user" ? s.user : s.bot}>
+            <Markdown>{t.text}</Markdown>
           </View>
         ))}
         {pending ? <ActivityIndicator color={c.foregroundMuted} style={{ alignSelf: "flex-start" }} /> : null}
