@@ -1,5 +1,5 @@
 import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client";
-import { Markdown, Modal, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
+import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { askPoll, askStart, claudeModelOf, type Turn } from "../shared/ask.ts";
@@ -34,26 +34,17 @@ export const openAsk = (agentId: string | null) => set({ open: true, agentId });
 const FONT_MIN = 12;
 const FONT_MAX = 40;
 const THREAD_ID = "paseo-floating-window-thread";
-const POLL_MS = 1500;
+const POLL_MS = 500;
 
 // Mount once, outside any Pressable: modals are React portals, so their events bubble up the React tree.
-// Desktop gets a resizable window; compact layouts the host's bottom sheet.
+// Own window everywhere: the host Modal's header is too tall on phones and its desktop size is fixed.
 export function AskModal(props: PluginHostProps) {
   const { open } = useAskState();
-  if (!props.layout.compact) {
-    return open ? (
-      <FloatingWindow theme={props.theme} title="Ask" onClose={() => setAskOpen(false)}>
-        <AskBody {...props} />
-      </FloatingWindow>
-    ) : null;
-  }
-  return (
-    <Modal title="Ask" open={open} onOpenChange={setAskOpen}>
-      <Modal.Content scrollable={false} contentContainerStyle={{ flex: 1, padding: 16, gap: 10 }}>
-        {open ? <AskBody {...props} /> : null}
-      </Modal.Content>
-    </Modal>
-  );
+  return open ? (
+    <FloatingWindow theme={props.theme} compact={props.layout.compact} title="Ask" onClose={() => setAskOpen(false)}>
+      <AskBody {...props} />
+    </FloatingWindow>
+  ) : null;
 }
 
 function AskBody({ theme }: PluginHostProps) {
@@ -114,7 +105,6 @@ function AskBody({ theme }: PluginHostProps) {
         padding: 16,
       },
       bot: { alignSelf: "stretch" as const },
-      hint: { color: c.foregroundMuted, fontSize: BASE },
       error: { color: c.statusDanger, fontSize: small },
       row: { flexDirection: "row" as const, gap: 8, alignItems: "flex-end" as const },
       input: {
@@ -152,7 +142,6 @@ function AskBody({ theme }: PluginHostProps) {
       </View>
       <ScrollView ref={scroll} style={s.list} onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}>
         <View nativeID={THREAD_ID} style={s.listContent}>
-        {turns.length === 0 ? <Text style={s.hint}>Ask anything; Claude can search the web and use tools. Enter sends, Shift+Enter adds a line.</Text> : null}
         {turns.map((t, i) => (
           <View key={i} style={t.role === "user" ? s.user : s.bot}>
             <Markdown>{t.text}</Markdown>

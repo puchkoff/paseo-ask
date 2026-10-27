@@ -7,12 +7,15 @@ const TIMEOUT_MS = 600_000;
 const SYSTEM_PROMPT =
   "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Answers render as Markdown, tables included.";
 
-// Full tooling with the user's settings and MCP servers, no permission prompts (nobody can answer them).
+// Full tooling and MCP servers, no permission prompts (nobody can answer them).
+// No user settings: hooks, plugins, skills and CLAUDE.md tripled the context (17k -> 49k tokens) and added ~2 s.
 // No saved session: the thread is resent each turn.
 export function claudeArgs(model?: string): string[] {
   return [
     "-p",
     "--no-session-persistence",
+    "--setting-sources",
+    "",
     "--permission-mode",
     "bypassPermissions",
     "--append-system-prompt",

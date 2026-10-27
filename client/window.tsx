@@ -1,6 +1,6 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { type ReactNode, useRef, useState } from "react";
-import { Dimensions, type GestureResponderEvent, Modal, Pressable, Text, View, type ViewStyle } from "react-native";
+import { Dimensions, type GestureResponderEvent, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, Text, View, type ViewStyle } from "react-native";
 import { followPointer, load, save } from "./web.ts";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -23,8 +23,34 @@ function clamp(r: Rect): Rect {
   return { w, h, x: Math.max(0, Math.min(r.x, width - w)), y: Math.max(0, Math.min(r.y, height - h)) };
 }
 
-// Desktop window: drag by the title bar, resize from the bottom-right corner; size and position persist.
-export function FloatingWindow({ theme, title, onClose, children }: { theme: PluginTheme; title: string; onClose(): void; children: ReactNode }) {
+type Props = { theme: PluginTheme; compact: boolean; title: string; onClose(): void; children: ReactNode };
+
+// Phones: full screen with a slim header, lifted above the keyboard.
+function FullScreenWindow({ theme, title, onClose, children }: Props) {
+  const c = theme.colors;
+  return (
+    <Modal animationType="slide" visible onRequestClose={onClose}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: c.surface0 }}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderColor: c.border }}>
+            <Text style={{ flex: 1, color: c.foreground, fontSize: 15, fontWeight: "600" }}>{title}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} hitSlop={12}>
+              <Text style={{ color: c.foregroundMuted, fontSize: 18 }}>✕</Text>
+            </Pressable>
+          </View>
+          <View style={{ flex: 1, padding: 12 }}>{children}</View>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+export function FloatingWindow(props: Props) {
+  return props.compact ? <FullScreenWindow {...props} /> : <DesktopWindow {...props} />;
+}
+
+// Desktop window: drag by the title bar, resize from the edges and corner; size and position persist.
+function DesktopWindow({ theme, title, onClose, children }: Props) {
   const [rect, setRect] = useState<Rect>(() => clamp(load(KEY, initialRect())));
   const rectRef = useRef(rect);
   rectRef.current = rect;
