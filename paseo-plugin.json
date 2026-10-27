@@ -1,0 +1,9 @@
+{
+  "id": "paseo-floating-window",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.11.4"
+  },
+  "name": "Ask",
+  "description": "A floating window for quick questions, answered by Claude on the daemon."
+}
