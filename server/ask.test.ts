@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createAsk, transcript } from "./ask.ts";
+import { claudeArgs, createAsk, createJobs, transcript } from "./ask.ts";
 import { CommandError } from "./exec.ts";
 
 test("single question is sent as-is", () => {
@@ -24,4 +24,18 @@ test("returns result, surfaces claude errors from stdout", async () => {
     throw new CommandError("exit 1", JSON.stringify({ is_error: true, result: "Not logged in" }));
   }, "claude");
   await assert.rejects(bad({ turns: [{ role: "user", text: "?" }] }), /Not logged in/);
+});
+
+test("model flag only for a non-default model", () => {
+  assert.ok(!claudeArgs("default").includes("--model"));
+  assert.deepEqual(claudeArgs("opus").slice(-2), ["--model", "opus"]);
+});
+
+test("job runs in the background and is handed out once", async () => {
+  const jobs = createJobs(async () => ({ answer: "hi" }));
+  const { jobId } = jobs.start({ turns: [{ role: "user", text: "?" }] });
+  assert.equal(jobs.poll({ jobId }).status, "running");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(jobs.poll({ jobId }), { status: "done", answer: "hi" });
+  assert.equal(jobs.poll({ jobId }).status, "error");
 });

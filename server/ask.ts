@@ -1,26 +1,27 @@
 import * as os from "node:os";
-import type { Turn } from "../shared/ask.ts";
+import type { Model, Turn } from "../shared/ask.ts";
 import { CommandError, type RunCommand } from "./exec.ts";
 
-const TIMEOUT_MS = 180_000;
+// Web research and tool runs take minutes.
+const TIMEOUT_MS = 600_000;
 const SYSTEM_PROMPT =
-  "You answer quick questions in a small chat window. Be brief and direct. Markdown is shown as plain text, so avoid tables and headings.";
+  "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Markdown is shown as plain text, so avoid tables and headings.";
 
-// No tools, MCP, settings or saved session: a stateless Q&A call, the thread is resent each turn.
-export const CLAUDE_ARGS = [
-  "-p",
-  "--no-session-persistence",
-  "--tools",
-  "",
-  "--setting-sources",
-  "",
-  "--strict-mcp-config",
-  "--disable-slash-commands",
-  "--system-prompt",
-  SYSTEM_PROMPT,
-  "--output-format",
-  "json",
-];
+// Full tooling with the user's settings and MCP servers, no permission prompts (nobody can answer them).
+// No saved session: the thread is resent each turn.
+export function claudeArgs(model: Model): string[] {
+  return [
+    "-p",
+    "--no-session-persistence",
+    "--permission-mode",
+    "bypassPermissions",
+    "--append-system-prompt",
+    SYSTEM_PROMPT,
+    "--output-format",
+    "json",
+    ...(model === "default" ? [] : ["--model", model]),
+  ];
+}
 
 export function transcript(turns: Turn[]): string {
   if (turns.length === 1) return turns[0].text;
@@ -29,14 +30,14 @@ export function transcript(turns: Turn[]): string {
 }
 
 export function createAsk(run: RunCommand, claude: string) {
-  return async ({ turns }: { turns: Turn[] }) => {
+  return async ({ turns, model = "default" }: { turns: Turn[]; model?: Model }) => {
     let stdout: string;
     try {
       // Thinking off: the CLI's default thinking makes headless calls ~30x slower.
-      stdout = await run(claude, CLAUDE_ARGS, {
+      stdout = await run(claude, claudeArgs(model), {
         timeoutMs: TIMEOUT_MS,
         input: transcript(turns),
-        cwd: os.tmpdir(),
+        cwd: os.homedir(),
         env: { ...process.env, MAX_THINKING_TOKENS: "0" },
       });
     } catch (err) {
@@ -46,5 +47,33 @@ export function createAsk(run: RunCommand, claude: string) {
     const out = JSON.parse(stdout) as { is_error?: boolean; result?: string };
     if (out.is_error || typeof out.result !== "string") throw new Error(out.result || "claude returned no answer");
     return { answer: out.result.trim() };
+  };
+}
+
+type Job = { status: "running" } | { status: "done"; answer: string } | { status: "error"; error: string };
+
+export function createJobs(answer: ReturnType<typeof createAsk>) {
+  const jobs = new Map<string, Job>();
+  let next = 0;
+  return {
+    start(input: { turns: Turn[]; model?: Model }) {
+      const jobId = `${Date.now()}-${next++}`;
+      jobs.set(jobId, { status: "running" });
+      answer(input).then(
+        ({ answer }) => jobs.set(jobId, { status: "done", answer }),
+        (err) => {
+          console.error("[paseo-floating-window] ask failed:", err);
+          jobs.set(jobId, { status: "error", error: err instanceof Error ? err.message : String(err) });
+        },
+      );
+      return { jobId };
+    },
+    // A finished job is handed out once, then forgotten.
+    poll({ jobId }: { jobId: string }): Job {
+      const job = jobs.get(jobId);
+      if (!job) return { status: "error", error: "unknown job (daemon or plugin restarted?)" };
+      if (job.status !== "running") jobs.delete(jobId);
+      return job;
+    },
   };
 }
