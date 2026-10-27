@@ -1,7 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { type ReactNode, useRef, useState } from "react";
 import { Dimensions, type GestureResponderEvent, Modal, Pressable, Text, View, type ViewStyle } from "react-native";
-import { load, save } from "./web.ts";
+import { followPointer, load, save } from "./web.ts";
 
 type Rect = { x: number; y: number; w: number; h: number };
 const KEY = "paseo-floating-window:rect";
@@ -26,23 +26,26 @@ function clamp(r: Rect): Rect {
 // Desktop window: drag by the title bar, resize from the bottom-right corner; size and position persist.
 export function FloatingWindow({ theme, title, onClose, children }: { theme: PluginTheme; title: string; onClose(): void; children: ReactNode }) {
   const [rect, setRect] = useState<Rect>(() => clamp(load(KEY, initialRect())));
-  const drag = useRef<{ px: number; py: number; start: Rect } | null>(null);
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
   const c = theme.colors;
 
+  // The press only starts the gesture; followPointer tracks it on the window.
   const responder = (apply: (start: Rect, dx: number, dy: number) => Rect) => ({
     onStartShouldSetResponder: () => true,
+    onResponderTerminationRequest: () => false,
     onResponderGrant: (e: GestureResponderEvent) => {
-      drag.current = { px: e.nativeEvent.pageX, py: e.nativeEvent.pageY, start: rect };
-    },
-    onResponderMove: (e: GestureResponderEvent) => {
-      const d = drag.current;
-      if (d) setRect(clamp(apply(d.start, e.nativeEvent.pageX - d.px, e.nativeEvent.pageY - d.py)));
-    },
-    onResponderRelease: () => {
-      drag.current = null;
-      setRect((r) => (save(KEY, r), r));
+      const start = rectRef.current;
+      followPointer(
+        { clientX: e.nativeEvent.pageX, clientY: e.nativeEvent.pageY },
+        (dx, dy) => setRect(clamp(apply(start, dx, dy))),
+        () => save(KEY, rectRef.current),
+      );
     },
   });
+  const edge = (style: ViewStyle, cursor: string, apply: (start: Rect, dx: number, dy: number) => Rect) => (
+    <View {...responder(apply)} style={[{ position: "absolute" }, style, { cursor } as unknown as ViewStyle]} />
+  );
 
   return (
     <Modal transparent visible onRequestClose={onClose}>
@@ -74,12 +77,14 @@ export function FloatingWindow({ theme, title, onClose, children }: { theme: Plu
             </Pressable>
           </View>
           <View style={{ flex: 1, padding: 16 }}>{children}</View>
+          {edge({ top: 0, right: 0, bottom: 0, width: 8 }, "ew-resize", (s, dx) => ({ ...s, w: s.w + dx }))}
+          {edge({ left: 0, right: 0, bottom: 0, height: 8 }, "ns-resize", (s, _dx, dy) => ({ ...s, h: s.h + dy }))}
           <View
             {...responder((s, dx, dy) => ({ ...s, w: s.w + dx, h: s.h + dy }))}
             accessibilityLabel="Resize window"
-            style={{ position: "absolute", right: 0, bottom: 0, width: 18, height: 18, cursor: "nwse-resize" } as unknown as ViewStyle}
+            style={{ position: "absolute", right: 0, bottom: 0, width: 22, height: 22, alignItems: "flex-end", justifyContent: "flex-end", padding: 3, cursor: "nwse-resize" } as unknown as ViewStyle}
           >
-            <Text style={{ color: c.foregroundMuted, fontSize: 12, textAlign: "right" }}>◢</Text>
+            <Text style={{ color: c.foregroundMuted, fontSize: 14, lineHeight: 14 }}>◢</Text>
           </View>
         </View>
       </View>

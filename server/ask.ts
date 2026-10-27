@@ -5,7 +5,7 @@ import { CommandError, type RunCommand } from "./exec.ts";
 // Web research and tool runs take minutes.
 const TIMEOUT_MS = 600_000;
 const SYSTEM_PROMPT =
-  "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Markdown is shown as plain text, so avoid tables and headings.";
+  "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Answers render as Markdown, tables included.";
 
 // Full tooling with the user's settings and MCP servers, no permission prompts (nobody can answer them).
 // No saved session: the thread is resent each turn.
