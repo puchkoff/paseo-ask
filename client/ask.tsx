@@ -37,21 +37,32 @@ const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
-// v4: bump when State changes shape, so a newer copy never reads an older copy's store.
 // stop: set by the mounted window, so Escape can stop from outside it.
 type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void };
-const g = globalThis as { __paseoAskStoreV4?: Store };
-const store: Store = (g.__paseoAskStoreV4 ??= {
-  state: { queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs },
-  listeners: new Set(),
+const DEFAULTS: State = { queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
+// The thread is also kept in the app's storage (web/desktop), so an app reload keeps it too.
+// shortcut: answer images (data: URIs) aren't saved, so after an app reload they show as links; save them if missed.
+const THREAD_KEY = "paseo-ask:thread";
+const MAX_SAVED_TURNS = 60;
+// One key for every plugin version: a deploy reloads the plugin and must keep the open window
+// and the thread (an answer still running dies with the daemon side). New fields get their defaults;
+// never rename this key.
+// __paseoAskStoreV3/V4 are what 8d0450f and earlier used.
+const g = globalThis as unknown as Record<string, Store | undefined>;
+const legacy = g.__paseoAskStoreV4 ?? g.__paseoAskStoreV3;
+const store: Store = (g.__paseoAskStore ??= {
+  state: { ...DEFAULTS, ...(legacy?.state ?? { turns: load(THREAD_KEY, { turns: [] as Turn[] }).turns }) },
+  listeners: legacy?.listeners ?? new Set(),
   // Image data: URIs by daemon path: attachment previews, and images answers embed.
-  previews: new Map(),
+  previews: legacy?.previews ?? new Map(),
 });
+store.state = { ...DEFAULTS, ...store.state };
 const previews = store.previews;
 const current = () => store.state;
 function set(patch: Partial<State>) {
   store.state = { ...store.state, ...patch };
   if ("fontSize" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize });
+  if ("turns" in patch) save(THREAD_KEY, { turns: store.state.turns.slice(-MAX_SAVED_TURNS) });
   for (const l of store.listeners) l();
 }
 const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.listeners.delete(l));
