@@ -1,10 +1,11 @@
 import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client";
-import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
+import { Icon, Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Image, Modal, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { type AskFile, askPoll, askStart, askSteer, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, type TextStyle, type ScrollView as NativeScrollView, Text, View } from "react-native";
+import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
-import { autoGrow, load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { enterAction, sendAction } from "../shared/send.ts";
+import { autoGrow, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { Steps } from "./steps.tsx";
 import { FloatingWindow } from "./window.tsx";
 
@@ -15,7 +16,10 @@ import { FloatingWindow } from "./window.tsx";
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
 // live: steps of the answer in progress; jobId: its daemon job, for steering.
 // unread: an answer arrived while the window was closed (dot on the Ask buttons).
+// queued: questions sent with the "queue" behavior, asked one by one after the current answer.
+type Queued = { text: string; files: AskFile[] };
 type State = {
+  queued: Queued[];
   open: boolean;
   agentId: string | null;
   draft: string;
@@ -33,11 +37,12 @@ const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
-// v3: bump when State changes shape, so a newer copy never reads an older copy's store.
-type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string> };
-const g = globalThis as { __paseoAskStoreV3?: Store };
-const store = (g.__paseoAskStoreV3 ??= {
-  state: { open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs },
+// v4: bump when State changes shape, so a newer copy never reads an older copy's store.
+// stop: set by the mounted window, so Escape can stop from outside it.
+type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void };
+const g = globalThis as { __paseoAskStoreV4?: Store };
+const store: Store = (g.__paseoAskStoreV4 ??= {
+  state: { queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs },
   listeners: new Set(),
   // Image data: URIs by daemon path: attachment previews, and images answers embed.
   previews: new Map(),
@@ -53,6 +58,8 @@ const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.l
 const useAskState = () => useSyncExternalStore(subscribe, current);
 
 export const setAskOpen = (open: boolean) => set(open ? { open, unread: false } : { open });
+// Escape: stops an answer in progress, like Paseo's Escape interrupts an agent; otherwise closes.
+export const escapeAsk = () => (current().pending && store.stop ? store.stop() : setAskOpen(false));
 // seed: text put before the draft (a quoted selection).
 export const openAsk = (agentId: string | null, seed = "") => set({ open: true, unread: false, agentId, draft: seed + current().draft });
 // For the Ask buttons' icon: a spinner while answering, a dot when an unseen answer is ready.
@@ -80,7 +87,7 @@ const POLL_MS = 500;
 export function AskModal(props: PluginHostProps) {
   const { open } = useAskState();
   return open ? (
-    <FloatingWindow theme={props.theme} compact={props.layout.compact} title="Ask" onClose={() => setAskOpen(false)}>
+    <FloatingWindow theme={props.theme} compact={props.layout.compact} title="Ask" onClose={() => setAskOpen(false)} onEscape={escapeAsk}>
       <AskBody {...props} />
     </FloatingWindow>
   ) : null;
@@ -116,7 +123,7 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
   useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
-  const { turns, live, pending, error, fontSize, agentId } = useAskState();
+  const { turns, live, queued, pending, error, fontSize, agentId } = useAskState();
   const [scrolled, setScrolled] = useState(false);
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
@@ -132,15 +139,42 @@ function AskBody({ theme }: PluginHostProps) {
   const maxInput = bodyHeight ? Math.round(bodyHeight / 2) : 160;
   useEffect(() => autoGrow(INPUT_ID, maxInput), [draft, maxInput, fontSize]);
 
-  // While an answer is in progress, Send steers it instead of queueing a new question.
-  async function steer() {
-    const text = draft.trim();
+  const stopRpc = useRpc(askStop);
+  const stop = () => {
     const jobId = current().jobId;
-    if (!text || !jobId || uploading) return;
-    const withPaths = files.length ? `${text}\n\n[Attached files, read them with your tools:\n${files.map((f) => `- ${f.path}`).join("\n")}]` : text;
+    if (jobId) void stopRpc({ jobId }).catch((err) => set({ error: err instanceof Error ? err.message : String(err) }));
+  };
+  useEffect(() => {
+    store.stop = stop;
+  });
+
+  const withPaths = (text: string, list: AskFile[]) =>
+    list.length ? `${text}\n\n[Attached files, read them with your tools:\n${list.map((f) => `- ${f.path}`).join("\n")}]` : text;
+
+  // Send and its alternate act like Paseo's composer: see shared/send.ts.
+  async function submit(alternate: boolean) {
+    const text = draft.trim();
+    if ((!text && !files.length) || uploading) return;
+    const action = sendAction(current().pending, sendSettings().sendBehavior, alternate);
+    const sent = files;
+    if (action === "ask") {
+      setDraft("");
+      setFiles([]);
+      return ask({ text, files: sent });
+    }
+    if (action === "queue" || action === "interrupt") {
+      // interrupt = stop, then ask it right away (it heads the queue).
+      set({ queued: action === "queue" ? [...current().queued, { text, files: sent }] : [{ text, files: sent }, ...current().queued] });
+      setDraft("");
+      setFiles([]);
+      if (action === "interrupt") stop();
+      return;
+    }
+    const jobId = current().jobId;
+    if (!jobId) return;
     try {
-      const { accepted } = await steerRpc({ jobId, text: withPaths });
-      if (!accepted) return set({ error: "The answer had already finished; press Send to ask it as a new question." });
+      const { accepted } = await steerRpc({ jobId, text: withPaths(text, sent) });
+      if (!accepted) return set({ error: "The answer had already finished; send it again as a new question." });
       setDraft("");
       setFiles([]);
     } catch (err) {
@@ -148,14 +182,9 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
 
-  async function send() {
-    if (current().pending) return steer();
-    const text = draft.trim();
-    if ((!text && !files.length) || uploading) return;
-    const next: Turn[] = [...current().turns, { role: "user", text, ...(files.length ? { files } : {}) }];
+  async function ask(q: Queued) {
+    const next: Turn[] = [...current().turns, { role: "user", text: q.text, ...(q.files.length ? { files: q.files } : {}) }];
     set({ turns: next, pending: true, error: null });
-    setDraft("");
-    setFiles([]);
     try {
       // Steps are display-only; resend just the text and files.
       const { jobId } = await start({ turns: forClaude(next), model, effort });
@@ -167,13 +196,18 @@ function AskBody({ theme }: PluginHostProps) {
         if (job.status === "running") continue;
         if (job.status === "error") throw new Error(job.error ?? "failed");
         for (const [p, uri] of Object.entries(job.images ?? {})) previews.set(p, uri);
-        set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps }], unread: !current().open });
+        set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps, ...(job.stopped ? { stopped: true } : {}) }], unread: !current().open });
         break;
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     } finally {
       set({ pending: false, live: [], jobId: null });
+    }
+    const [head, ...rest] = current().queued;
+    if (head) {
+      set({ queued: rest });
+      void ask(head);
     }
   }
 
@@ -208,24 +242,15 @@ function AskBody({ theme }: PluginHostProps) {
       lightbox: { flex: 1, backgroundColor: "rgba(0,0,0,0.85)", alignItems: "center" as const, justifyContent: "center" as const, padding: 24 },
       lightboxImage: { width: "100%" as const, height: "100%" as const },
       fileName: { color: c.foreground, fontSize: 13, maxWidth: 220 },
-      attach: { paddingHorizontal: 6, paddingVertical: 10 },
-      attachText: { fontSize: 18 },
       error: { color: c.statusDanger, fontSize: small },
-      row: { flexDirection: "row" as const, gap: 8, alignItems: "flex-end" as const },
-      input: {
-        flex: 1,
-        minHeight: 44,
-        maxHeight: maxInput,
-        borderWidth: 1,
-        borderColor: c.border,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: c.foreground,
-        fontSize,
-      },
-      send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 11 },
-      sendText: { color: c.accentForeground, fontSize: 15, fontWeight: "600" as const },
+      hint: { color: c.foregroundMuted, fontSize: small },
+      box: { borderWidth: 1, borderColor: c.border, borderRadius: 16, backgroundColor: c.surface1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, gap: 6 },
+      input: { minHeight: 24, maxHeight: maxInput, padding: 0, color: c.foreground, fontSize, outlineStyle: "none" } as unknown as TextStyle,
+      boxBar: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, minHeight: 28 },
+      // Paseo's composer buttons: 28 px circles, accent Send with an up arrow, red Stop with a white square.
+      sendButton: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.accent, alignItems: "center" as const, justifyContent: "center" as const },
+      stopButton: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.statusDanger, alignItems: "center" as const, justifyContent: "center" as const },
+      stopSquare: { width: 10, height: 10, borderRadius: 2, backgroundColor: "#fff" },
     }),
     [c, pending, fontSize, maxInput],
   );
@@ -299,11 +324,18 @@ function AskBody({ theme }: PluginHostProps) {
               {/* The last text step is the answer itself; draw it once, below the steps. */}
               {t.steps?.length ? <Steps theme={theme} steps={t.steps.filter((st, k, all) => !(st.kind === "text" && k === all.length - 1 && st.text.trim() === t.text))} renderText={answerText} /> : null}
               {answerText(t.text, -1)}
+              {t.stopped ? <Text style={s.hint}>Stopped</Text> : null}
             </View>
           ),
         )}
         {pending && live.length ? <Steps theme={theme} steps={live} renderText={answerText} /> : null}
         {pending ? <ActivityIndicator color={c.foregroundMuted} style={{ alignSelf: "flex-start" }} /> : null}
+        {queued.map((q, i) => (
+          <View key={`q${i}`} style={[s.user, { opacity: 0.6 }]}>
+            <Text style={s.hint}>Queued</Text>
+            {q.text ? <Markdown>{q.text}</Markdown> : null}
+          </View>
+        ))}
         {error ? <Text style={s.error}>{error}</Text> : null}
         </View>
       </ScrollView>
@@ -313,34 +345,58 @@ function AskBody({ theme }: PluginHostProps) {
           {uploading ? <ActivityIndicator color={c.foregroundMuted} /> : null}
         </View>
       ) : null}
-      <View style={s.row}>
-        {Platform.OS === "web" ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Attach files" onPress={() => pickFiles((picked) => void attach(picked))} style={s.attach}>
-            <Text style={s.attachText}>📎</Text>
-          </Pressable>
-        ) : null}
+      {/* Same shape as Paseo's composer: one box, attach bottom-left, Stop and Send bottom-right. */}
+      <View style={s.box}>
         <TextInput
           nativeID={INPUT_ID}
           style={s.input}
           value={draft}
           onChangeText={setDraft}
-          placeholder="Your question"
+          placeholder={pending ? "Steer or queue a message" : "Your question"}
           placeholderTextColor={c.foregroundMuted}
           multiline
           autoFocus
           accessibilityLabel="Question"
           onKeyPress={(e) => {
-            // Web only: Enter sends, Shift+Enter keeps the newline.
-            const ev = e.nativeEvent as { key: string; shiftKey?: boolean };
-            if (ev.key === "Enter" && !ev.shiftKey) {
-              (e as unknown as { preventDefault?: () => void }).preventDefault?.();
-              void send();
+            // Web only: Paseo's send keys (shared/send.ts); Escape stops an answer in progress.
+            const ev = e.nativeEvent as { key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean };
+            const prevent = () => (e as unknown as { preventDefault?: () => void }).preventDefault?.();
+            if (ev.key === "Escape" && pending) {
+              prevent();
+              return stop();
             }
+            if (ev.key !== "Enter") return;
+            const kind = enterAction(sendSettings().sendShortcut, ev, pending);
+            if (!kind) return;
+            prevent();
+            void submit(kind === "alternate");
           }}
         />
-        <Pressable accessibilityRole="button" accessibilityLabel={pending ? "Steer the answer in progress" : "Send question"} onPress={() => void send()} style={s.send}>
-          <Text style={s.sendText}>{pending ? "Steer" : "Send"}</Text>
-        </Pressable>
+        <View style={s.boxBar}>
+          {Platform.OS === "web" ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Attach files" onPress={() => pickFiles((picked) => void attach(picked))} hitSlop={6}>
+              <Icon name="Paperclip" size={18} color={c.foregroundMuted} />
+            </Pressable>
+          ) : null}
+          <View style={s.spacer} />
+          {pending ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Stop" onPress={stop} style={s.stopButton}>
+              <View style={s.stopSquare} />
+            </Pressable>
+          ) : null}
+          {!pending || draft.trim() || files.length ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={pending ? "Send (long-press for the alternate)" : "Send question"}
+              disabled={!draft.trim() && !files.length}
+              onPress={() => void submit(false)}
+              onLongPress={() => void submit(true)}
+              style={[s.sendButton, !draft.trim() && !files.length ? { opacity: 0.4 } : null]}
+            >
+              <Icon name="ArrowUp" size={16} color={c.accentForeground} />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     </View>
   );

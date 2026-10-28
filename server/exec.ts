@@ -22,7 +22,7 @@ export type RunLines = (
   file: string,
   args: readonly string[],
   // onStdin: keep stdin open after input and hand the caller a writer (stream-json input).
-  options: RunOptions & { onLine: (line: string) => void; onStdin?: (io: { write(s: string): void; end(): void }) => void },
+  options: RunOptions & { onLine: (line: string) => void; onStdin?: (io: { write(s: string): void; end(): void; kill(): void }) => void },
 ) => Promise<{ code: number | null; stderr: string }>;
 
 export const runLines: RunLines = (file, args, { timeoutMs, input, cwd, env, onLine, onStdin }) =>
@@ -54,5 +54,5 @@ export const runLines: RunLines = (file, args, { timeoutMs, input, cwd, env, onL
     });
     if (!onStdin) return void child.stdin.end(input ?? "");
     child.stdin.write(input ?? "");
-    onStdin({ write: (s) => void child.stdin.write(s), end: () => child.stdin.end() });
+    onStdin({ write: (s) => void child.stdin.write(s), end: () => child.stdin.end(), kill: () => void child.kill("SIGTERM") });
   });

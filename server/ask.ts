@@ -110,7 +110,7 @@ const userMessage = (text: string) => `${JSON.stringify({ type: "user", message:
 // control.steer is set while claude still reads stdin. Claude Code folds a message sent mid-turn
 // into the running turn; one that arrives after the result would start a new turn, so stdin closes
 // at the first result and steer then reports false.
-export type Control = { steer?: (text: string) => boolean };
+export type Control = { steer?: (text: string) => boolean; stop?: () => void };
 
 export function createAsk(run: RunLines, claude: string) {
   return async ({ turns, model, effort }: { turns: Turn[]; model?: string; effort?: Effort }, steps: Step[] = [], control: Control = {}) => {
@@ -118,12 +118,17 @@ export function createAsk(run: RunLines, claude: string) {
     let final: { result?: string; isError?: boolean } = {};
     let lastLine = "";
     let close = () => {};
+    let stopped = false;
     // Without the agent's effort, thinking is off: the CLI default makes headless calls ~30x slower.
     const { code, stderr } = await run(claude, claudeArgs(model, effort), {
       timeoutMs: TIMEOUT_MS,
       input: userMessage(transcript(turns)),
       cwd: os.homedir(),
       onStdin: (io) => {
+        control.stop = () => {
+          stopped = true;
+          io.kill();
+        };
         let open = true;
         close = () => {
           if (open) io.end();
@@ -153,19 +158,24 @@ export function createAsk(run: RunLines, claude: string) {
       },
     });
     close();
+    control.stop = undefined;
+    if (stopped) {
+      const said = steps.filter((x): x is Extract<Step, { kind: "text" }> => x.kind === "text").map((x) => x.text);
+      return { answer: said.join("\n\n"), images: {}, stopped: true };
+    }
     if (final.result === undefined) throw new Error(stderr.trim().split("\n")[0] || `claude exited with code ${code}: ${lastLine.slice(0, 200)}`);
     if (final.isError) throw new Error(final.result || "claude returned an error");
     const answer = final.result.trim();
-    return { answer, images: await embedImages(answer) };
+    return { answer, images: await embedImages(answer), stopped: false };
   };
 }
 
 type Job =
   | { status: "running"; steps: Step[] }
-  | { status: "done"; steps: Step[]; answer: string; images: Record<string, string> }
+  | { status: "done"; steps: Step[]; answer: string; images: Record<string, string>; stopped: boolean }
   | { status: "error"; steps: Step[]; error: string };
 
-export function createJobs(answer: (input: { turns: Turn[]; model?: string; effort?: Effort }, steps: Step[], control: Control) => Promise<{ answer: string; images: Record<string, string> }>) {
+export function createJobs(answer: (input: { turns: Turn[]; model?: string; effort?: Effort }, steps: Step[], control: Control) => Promise<{ answer: string; images: Record<string, string>; stopped: boolean }>) {
   const jobs = new Map<string, Job>();
   const controls = new Map<string, Control>();
   let next = 0;
@@ -178,13 +188,18 @@ export function createJobs(answer: (input: { turns: Turn[]; model?: string; effo
       controls.set(jobId, control);
       jobs.set(jobId, { status: "running", steps });
       answer(input, steps, control).then(
-        ({ answer, images }) => jobs.set(jobId, { status: "done", steps, answer, images }),
+        ({ answer, images, stopped }) => jobs.set(jobId, { status: "done", steps, answer, images, stopped }),
         (err) => {
           console.error("[paseo-ask] ask failed:", err);
           jobs.set(jobId, { status: "error", steps, error: err instanceof Error ? err.message : String(err) });
         },
       );
       return { jobId };
+    },
+    stop({ jobId }: { jobId: string }) {
+      const stop = controls.get(jobId)?.stop;
+      stop?.();
+      return { stopped: !!stop };
     },
     steer({ jobId, text }: { jobId: string; text: string }) {
       return { accepted: controls.get(jobId)?.steer?.(text) ?? false };

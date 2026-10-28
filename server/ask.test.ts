@@ -30,7 +30,7 @@ const fakeRun = (events: object[], code = 0): RunLines => async (_f, _a, { onLin
 test("returns the result event, collects steps, surfaces errors", async () => {
   const ok = createAsk(fakeRun([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }, { type: "result", result: " 42 \n" }]), "claude");
   const steps: Step[] = [];
-  assert.deepEqual(await ok({ turns: [{ role: "user", text: "?" }] }, steps), { answer: "42", images: {} });
+  assert.deepEqual(await ok({ turns: [{ role: "user", text: "?" }] }, steps), { answer: "42", images: {}, stopped: false });
   assert.deepEqual(steps, [{ kind: "text", text: "hi" }]);
   const bad = createAsk(fakeRun([{ type: "result", is_error: true, result: "Not logged in" }], 1), "claude");
   await assert.rejects(bad({ turns: [{ role: "user", text: "?" }] }), /Not logged in/);
@@ -44,11 +44,11 @@ test("model flag only for a non-default model", () => {
 });
 
 test("job runs in the background and is handed out once", async () => {
-  const jobs = createJobs(async () => ({ answer: "hi", images: {} }));
+  const jobs = createJobs(async () => ({ answer: "hi", images: {}, stopped: false }));
   const { jobId } = jobs.start({ turns: [{ role: "user", text: "?" }] });
   assert.equal(jobs.poll({ jobId }).status, "running");
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(jobs.poll({ jobId }), { status: "done", steps: [], answer: "hi", images: {} });
+  assert.deepEqual(jobs.poll({ jobId }), { status: "done", steps: [], answer: "hi", images: {}, stopped: false });
   assert.equal(jobs.poll({ jobId }).status, "error");
 });
 
@@ -101,7 +101,7 @@ test("steer writes a user message mid-turn and stops after the result", async ()
   let control: import("./ask.ts").Control = {};
   const run: RunLines = async (_f, _a, { onLine, onStdin, input }) => {
     written.push(input ?? "");
-    onStdin?.({ write: (s) => void written.push(s), end: () => void (ended = true) });
+    onStdin?.({ write: (s) => void written.push(s), end: () => void (ended = true), kill: () => {} });
     assert.equal(control.steer?.("also this"), true);
     onLine(JSON.stringify({ type: "result", result: "ok" }));
     assert.equal(control.steer?.("too late") ?? false, false);
@@ -110,9 +110,23 @@ test("steer writes a user message mid-turn and stops after the result", async ()
   const steps: Step[] = [];
   const ask = createAsk(run, "claude");
   const p = ask({ turns: [{ role: "user", text: "q" }] }, steps, (control = {}));
-  assert.deepEqual(await p, { answer: "ok", images: {} });
+  assert.deepEqual(await p, { answer: "ok", images: {}, stopped: false });
   assert.equal(ended, true);
   assert.deepEqual(JSON.parse(written[0]), { type: "user", message: { role: "user", content: "q" } });
   assert.equal(JSON.parse(written[1]).message.content, "also this");
   assert.deepEqual(steps, [{ kind: "steer", text: "also this" }]);
+});
+
+test("stop kills claude and keeps the text said so far", async () => {
+  let killed = false;
+  let control: import("./ask.ts").Control = {};
+  const run: RunLines = async (_f, _a, { onLine, onStdin }) => {
+    onStdin?.({ write: () => {}, end: () => {}, kill: () => void (killed = true) });
+    onLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "partial" }] } }));
+    control.stop?.();
+    return { code: null, stderr: "" };
+  };
+  const out = await createAsk(run, "claude")({ turns: [{ role: "user", text: "q" }] }, [], (control = {}));
+  assert.equal(killed, true);
+  assert.deepEqual(out, { answer: "partial", images: {}, stopped: true });
 });

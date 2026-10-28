@@ -13,7 +13,14 @@ export const step = z.discriminatedUnion("kind", [
 ]);
 export type Step = z.infer<typeof step>;
 // steps are display-only: the client strips them before resending the thread.
-export const turn = z.object({ role: z.enum(["user", "assistant"]), text: z.string(), files: z.array(file).max(20).optional(), steps: z.array(step).optional() });
+// stopped: the user pressed Stop on this answer.
+export const turn = z.object({
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
+  files: z.array(file).max(20).optional(),
+  steps: z.array(step).optional(),
+  stopped: z.boolean().optional(),
+});
 export type AskFile = z.infer<typeof file>;
 export type Turn = z.infer<typeof turn>;
 
@@ -46,6 +53,12 @@ export const askSteer = defineRpc({
   output: z.object({ accepted: z.boolean() }),
 });
 
+export const askStop = defineRpc({
+  name: "ask.stop",
+  input: z.object({ jobId: z.string() }),
+  output: z.object({ stopped: z.boolean() }),
+});
+
 export const askPoll = defineRpc({
   name: "ask.poll",
   input: z.object({ jobId: z.string() }),
@@ -54,6 +67,8 @@ export const askPoll = defineRpc({
     status: z.enum(["running", "done", "error"]),
     steps: z.array(step).optional(),
     answer: z.string().optional(),
+    // The user pressed Stop: answer is whatever text came before it.
+    stopped: z.boolean().optional(),
     images: z.record(z.string(), z.string()).optional(),
     error: z.string().optional(),
   }),

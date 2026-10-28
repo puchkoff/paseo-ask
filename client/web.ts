@@ -223,3 +223,15 @@ export function autoGrow(nativeID: string, max: number): void {
   el.style.height = `${h}px`;
   el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
 }
+
+// Paseo's own composer settings (Settings → General), so Ask sends like the main window.
+// Web keeps them in localStorage; native gets the app defaults.
+export type SendSettings = { sendBehavior: "steer" | "interrupt" | "queue"; sendShortcut: "enter" | "mod-enter" };
+export function sendSettings(): SendSettings {
+  const fallback: SendSettings = { sendBehavior: "steer", sendShortcut: "enter" };
+  const s = load<Partial<SendSettings>>("@paseo:app-settings", {});
+  return {
+    sendBehavior: s.sendBehavior === "queue" || s.sendBehavior === "interrupt" ? s.sendBehavior : fallback.sendBehavior,
+    sendShortcut: s.sendShortcut === "mod-enter" ? "mod-enter" : fallback.sendShortcut,
+  };
+}

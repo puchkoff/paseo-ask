@@ -1,6 +1,7 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import { type ReactNode, useRef, useState } from "react";
 import { Dimensions, type GestureResponderEvent, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, Text, View, type ViewStyle } from "react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { followPointer, load, save } from "./web.ts";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -23,19 +24,20 @@ function clamp(r: Rect): Rect {
   return { w, h, x: Math.max(0, Math.min(r.x, width - w)), y: Math.max(0, Math.min(r.y, height - h)) };
 }
 
-type Props = { theme: PluginTheme; compact: boolean; title: string; onClose(): void; children: ReactNode };
+// onClose: ✕ and a click outside. onEscape: the Escape key (Ask uses it to stop an answer first).
+type Props = { theme: PluginTheme; compact: boolean; title: string; onClose(): void; onEscape(): void; children: ReactNode };
 
 // Phones: full screen with a slim header, lifted above the keyboard.
-function FullScreenWindow({ theme, title, onClose, children }: Props) {
+function FullScreenWindow({ theme, title, onClose, onEscape, children }: Props) {
   const c = theme.colors;
   return (
-    <Modal animationType="slide" visible onRequestClose={onClose}>
+    <Modal animationType="slide" visible onRequestClose={onEscape}>
       <SafeAreaView style={{ flex: 1, backgroundColor: c.surface0 }}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderColor: c.border }}>
             <Text style={{ flex: 1, color: c.foreground, fontSize: 15, fontWeight: "600" }}>{title}</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} hitSlop={12}>
-              <Text style={{ color: c.foregroundMuted, fontSize: 18 }}>✕</Text>
+              <Icon name="X" size={18} color={c.foregroundMuted} />
             </Pressable>
           </View>
           <View style={{ flex: 1, padding: 12 }}>{children}</View>
@@ -50,7 +52,7 @@ export function FloatingWindow(props: Props) {
 }
 
 // Desktop window: drag by the title bar, resize from the edges and corner; size and position persist.
-function DesktopWindow({ theme, title, onClose, children }: Props) {
+function DesktopWindow({ theme, title, onClose, onEscape, children }: Props) {
   const [rect, setRect] = useState<Rect>(() => clamp(load(KEY, initialRect())));
   const rectRef = useRef(rect);
   rectRef.current = rect;
@@ -74,8 +76,10 @@ function DesktopWindow({ theme, title, onClose, children }: Props) {
   );
 
   return (
-    <Modal transparent visible onRequestClose={onClose}>
+    <Modal transparent visible onRequestClose={onEscape}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)" }}>
+        {/* A click outside the window closes it; the answer keeps going. */}
+        <Pressable accessibilityLabel="Close Ask" onPress={onClose} style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }} />
         <View
           nativeID="paseo-ask-window"
           style={{
@@ -110,10 +114,10 @@ function DesktopWindow({ theme, title, onClose, children }: Props) {
               hitSlop={8}
               style={{ marginRight: 16 }}
             >
-              <Text style={{ color: c.foregroundMuted, fontSize: 14 }}>Reset</Text>
+              <Icon name="RotateCcwSquare" size={17} color={c.foregroundMuted} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} hitSlop={8}>
-              <Text style={{ color: c.foregroundMuted, fontSize: 18 }}>✕</Text>
+              <Icon name="X" size={18} color={c.foregroundMuted} />
             </Pressable>
           </View>
           <View style={{ flex: 1, padding: 16 }}>{children}</View>

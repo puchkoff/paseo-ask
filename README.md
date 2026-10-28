@@ -2,7 +2,7 @@
 
 A floating window for quick questions, answered by Claude on the daemon.
 
-Open it from the "Ask" button in the workspace header (also in a new-agent draft) or in an agent's composer. Follow-ups stay in the same thread. Tool calls show up as they happen, like in the main chat; sending while Claude works steers the answer in progress. The Ask button spins while answering and shows a dot when an answer is ready. On phones it opens full screen; on desktop it can be moved and resized, and you can paste images or attach files. Select text anywhere in Paseo for a small Ask button that quotes it; click an attached image to view it full size.
+Open it from the "Ask" button in the workspace header (also in a new-agent draft) or in an agent's composer. Follow-ups stay in the same thread. Tool calls show up as they happen, like in the main chat; while Claude works there is a Stop button, and sending follows Paseo's own setting (steer, queue or interrupt) and keys (Enter / Cmd+Enter), like the main composer. The Ask button spins while answering and shows a dot when an answer is ready. On phones it opens full screen; on desktop it can be moved and resized, and you can paste images or attach files. Select text anywhere in Paseo for a small Ask button that quotes it; click an attached image to view it full size.
 
 ![Ask open over the main window, with a tool call](assets/screenshot-overlay.png)
 
