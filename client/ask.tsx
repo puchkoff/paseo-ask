@@ -46,7 +46,9 @@ type State = {
 const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
-const prefs = load(PREFS_KEY, { fontSize: BASE, mode: "side" as AskMode });
+// Own key, written only when picked in Settings: prefs-v2 also holds "side" saved as the old default.
+const MODE_KEY = "paseo-ask:mode";
+const prefs = { fontSize: load(PREFS_KEY, { fontSize: BASE }).fontSize, mode: load(MODE_KEY, { mode: "popup" as AskMode }).mode };
 // stop: set by the mounted window, so Escape can stop from outside it.
 // panels: mounted side panels; an answer arriving while one shows isn't unread.
 type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void; panels?: number };
@@ -70,7 +72,8 @@ const store: Store = (g.__paseoAskStore ??= {
   // Image data: URIs by daemon path: attachment previews, and images answers embed.
   previews: new Map(),
 });
-store.state = { ...DEFAULTS, ...store.state };
+// mode from storage: a store kept across the deploy still holds the old "side" default.
+store.state = { ...DEFAULTS, ...store.state, mode: prefs.mode };
 const previews = store.previews;
 const current = () => store.state;
 // A store from before sessions (kept across a deploy) or the old saved thread becomes the first session.
@@ -84,7 +87,8 @@ function saveSessions({ sessions, threadId }: State) {
 }
 function set(patch: Partial<State>) {
   store.state = { ...store.state, ...patch };
-  if ("fontSize" in patch || "mode" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize, mode: store.state.mode });
+  if ("fontSize" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize });
+  if ("mode" in patch) save(MODE_KEY, { mode: store.state.mode });
   if ("turns" in patch) {
     store.state.sessions = upsertSession(store.state.sessions, store.state.threadId, store.state.turns, Date.now());
     saveSessions(store.state);

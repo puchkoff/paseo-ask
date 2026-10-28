@@ -9,5 +9,5 @@
     "paseo": ">=0.13.0"
   },
   "name": "Ask",
-  "description": "A side chat for quick questions and /btw, answered by Claude on the daemon."
+  "description": "A floating window for quick questions and /btw, answered by Claude on the daemon."
 }

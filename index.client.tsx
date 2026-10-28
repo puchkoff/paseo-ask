@@ -31,11 +31,11 @@ function AskSettings() {
     <SettingsSection title="Ask">
       <SettingsSelect<AskMode>
         label="Open Ask in"
-        hint="The side panel sits next to the agent; the window floats over the app. Saved on this device."
+        hint="The window floats over the app; the side panel sits next to the agent. Saved on this device."
         value={mode}
         options={[
-          { label: "Side panel", value: "side" },
           { label: "Floating window", value: "popup" },
+          { label: "Side panel", value: "side" },
         ]}
         onValueChange={setAskMode}
       />
