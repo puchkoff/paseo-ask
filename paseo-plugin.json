@@ -1,7 +1,8 @@
 {
   "id": "paseo-ask",
   "media": [
-    "assets/screenshot.png"
+    "assets/screenshot.png",
+    "assets/screenshot-attachment.png"
   ],
   "requirements": {
     "paseo": ">=0.13.0"

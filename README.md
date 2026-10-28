@@ -4,6 +4,10 @@ A floating window for quick questions, answered by Claude on the daemon.
 
 Open it from the "Ask" row in the sidebar footer or the "Ask" button in an agent's composer. Follow-ups stay in the same thread. It also has a button in the workspace header, which works in a new-agent draft too. On phones it opens full screen; on desktop it can be moved and resized, and you can paste images or attach files.
 
+![Ask answering with a table](assets/screenshot.png)
+
+![Ask reading an attached chart](assets/screenshot-attachment.png)
+
 **Runs with full access.** Each question runs `claude -p --permission-mode bypassPermissions` in your home directory on the daemon, with your Claude Code settings, skills and MCP servers: it can read and change files and run commands without asking. Questions, the thread and anything Claude reads go to Anthropic through your Claude Code login.
 
 ## Install
