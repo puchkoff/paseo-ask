@@ -28,13 +28,13 @@ const fakeRun = (events: object[], code = 0): RunLines => async (_f, _a, { onLin
 };
 
 test("returns the result event, collects steps, surfaces errors", async () => {
-  const ok = createAsk(fakeRun([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }, { type: "result", result: " 42 \n" }]), "claude");
+  const ok = createAsk(fakeRun([{ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }, { type: "result", result: " 42 \n" }]), "claude").ask;
   const steps: Step[] = [];
   assert.deepEqual(await ok({ turns: [{ role: "user", text: "?" }] }, steps), { answer: "42", images: {}, stopped: false });
   assert.deepEqual(steps, [{ kind: "text", text: "hi" }]);
-  const bad = createAsk(fakeRun([{ type: "result", is_error: true, result: "Not logged in" }], 1), "claude");
+  const bad = createAsk(fakeRun([{ type: "result", is_error: true, result: "Not logged in" }], 1), "claude").ask;
   await assert.rejects(bad({ turns: [{ role: "user", text: "?" }] }), /Not logged in/);
-  const none = createAsk(fakeRun([], 1), "claude");
+  const none = createAsk(fakeRun([], 1), "claude").ask;
   await assert.rejects(none({ turns: [{ role: "user", text: "?" }] }), /exited with code 1/);
 });
 
@@ -108,7 +108,7 @@ test("steer writes a user message mid-turn and stops after the result", async ()
     return { code: 0, stderr: "" };
   };
   const steps: Step[] = [];
-  const ask = createAsk(run, "claude");
+  const { ask } = createAsk(run, "claude");
   const p = ask({ turns: [{ role: "user", text: "q" }] }, steps, (control = {}));
   assert.deepEqual(await p, { answer: "ok", images: {}, stopped: false });
   assert.equal(ended, true);
@@ -126,7 +126,72 @@ test("stop kills claude and keeps the text said so far", async () => {
     control.stop?.();
     return { code: null, stderr: "" };
   };
-  const out = await createAsk(run, "claude")({ turns: [{ role: "user", text: "q" }] }, [], (control = {}));
+  const out = await createAsk(run, "claude").ask({ turns: [{ role: "user", text: "q" }] }, [], (control = {}));
   assert.equal(killed, true);
   assert.deepEqual(out, { answer: "partial", images: {}, stopped: true });
+});
+
+// A fake long-lived claude: answers each user message after a tick, exits when stdin closes.
+function fakeClaude() {
+  const procs: { args: readonly string[]; writes: string[]; killed: boolean }[] = [];
+  const run: RunLines = (_f, args, { input, onLine, onStdin }) =>
+    new Promise((resolve) => {
+      const proc = { args, writes: [] as string[], killed: false };
+      procs.push(proc);
+      const answer = (s: string) => {
+        proc.writes.push(s);
+        setTimeout(() => onLine(JSON.stringify({ type: "result", result: `re: ${JSON.parse(s).message.content}` })), 0);
+      };
+      answer(input ?? "");
+      onStdin?.({ write: answer, end: () => void setTimeout(() => resolve({ code: 0, stderr: "" }), 0), kill: () => ((proc.killed = true), resolve({ code: null, stderr: "" })) });
+    });
+  return { run, procs };
+}
+const sent = (s: string) => JSON.parse(s).message.content;
+
+test("a thread keeps its claude; model change, Clear and steer start a new one", async () => {
+  const { run, procs } = fakeClaude();
+  const { ask, dispose } = createAsk(run, "claude");
+  const q1 = { role: "user" as const, text: "q1" };
+  const a1 = await ask({ threadId: "t", turns: [q1] });
+  assert.equal(a1.answer, "re: q1");
+  const q2 = { role: "user" as const, text: "q2" };
+  const turns2 = [q1, { role: "assistant" as const, text: a1.answer }, q2];
+  assert.equal((await ask({ threadId: "t", turns: turns2 })).answer, "re: q2");
+  assert.equal(procs.length, 1, "follow-up reuses the process");
+  assert.equal(sent(procs[0].writes[1]), "q2", "only the new question is written");
+
+  await ask({ threadId: "t", turns: [...turns2, { role: "assistant", text: "re: q2" }, { role: "user", text: "q3" }], model: "opus" });
+  assert.equal(procs.length, 2, "model change starts a new process");
+  assert.match(sent(procs[1].writes[0]), /Conversation so far/);
+
+  await ask({ threadId: "t", turns: [{ role: "user", text: "fresh" }], model: "opus" });
+  assert.equal(procs.length, 3, "Clear starts a new process");
+
+  const control: import("./ask.ts").Control = {};
+  const p = ask({ threadId: "t", turns: [{ role: "user", text: "fresh" }, { role: "assistant", text: "re: fresh" }, { role: "user", text: "q" }], model: "opus" }, [], control);
+  assert.equal(control.steer?.("more"), true);
+  await p;
+  await ask({ threadId: "t", turns: [{ role: "user", text: "x" }, { role: "assistant", text: "y" }, { role: "user", text: "z" }, { role: "assistant", text: "w" }, { role: "user", text: "v" }], model: "opus" });
+  assert.equal(procs.length, 4, "a steered process is not reused");
+  dispose();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(procs.every((x, i) => i < 3 || x.killed), "dispose kills the idle process");
+});
+
+test("unpolled finished jobs are dropped after an hour; steer gets file paths", async () => {
+  let t = 0;
+  let steered = "";
+  const jobs = createJobs(async (_i, _s, control) => {
+    control.steer = (text) => ((steered = text), true);
+    await new Promise((r) => setTimeout(r, 0));
+    return { answer: "a", images: {}, stopped: false };
+  }, () => t);
+  const { jobId } = jobs.start({ turns: [{ role: "user", text: "?" }] });
+  jobs.steer({ jobId, text: "see", files: [{ name: "a.png", path: "/tmp/x/a.png" }] });
+  assert.match(steered, /^see\n\n\[Attached files.*- \/tmp\/x\/a\.png\]$/s);
+  await new Promise((r) => setTimeout(r, 0));
+  t = 61 * 60_000;
+  jobs.start({ turns: [{ role: "user", text: "?" }] });
+  assert.equal(jobs.poll({ jobId }).status, "error");
 });

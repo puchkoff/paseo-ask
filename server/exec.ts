@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export interface RunOptions {
-  timeoutMs: number;
   input?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -25,15 +24,11 @@ export type RunLines = (
   options: RunOptions & { onLine: (line: string) => void; onStdin?: (io: { write(s: string): void; end(): void; kill(): void }) => void },
 ) => Promise<{ code: number | null; stderr: string }>;
 
-export const runLines: RunLines = (file, args, { timeoutMs, input, cwd, env, onLine, onStdin }) =>
+export const runLines: RunLines = (file, args, { input, cwd, env, onLine, onStdin }) =>
   new Promise((resolve, reject) => {
     const child = spawn(file, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     let buf = "";
     let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${path.basename(file)} timed out after ${Math.round(timeoutMs / 1000)} s`));
-    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       buf += chunk;
       let i;
@@ -43,12 +38,8 @@ export const runLines: RunLines = (file, args, { timeoutMs, input, cwd, env, onL
       }
     });
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    child.on("error", reject);
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (buf) onLine(buf);
       resolve({ code, stderr });
     });

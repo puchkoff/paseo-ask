@@ -10,7 +10,7 @@ Open it from the "Ask" button in the workspace header (also in a new-agent draft
 
 ![The Ask button at the end of a text selection, outlined](assets/screenshot-selection.png)
 
-**Runs with full access.** Each question runs `claude -p --permission-mode bypassPermissions` in your home directory on the daemon, with your Claude Code settings, skills and MCP servers: it can read and change files and run commands without asking. Questions, the thread and anything Claude reads go to Anthropic through your Claude Code login.
+**Runs with full access.** Each thread runs `claude -p --permission-mode bypassPermissions` (one process, kept 15 minutes after the last answer) in your home directory on the daemon, with your Claude Code settings, skills and MCP servers: it can read and change files and run commands without asking. Questions, the thread and anything Claude reads go to Anthropic through your Claude Code login.
 
 ## Install
 

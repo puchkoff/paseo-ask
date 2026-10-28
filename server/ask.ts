@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Effort, Step, Turn } from "../shared/ask.ts";
+import type { AskFile, Effort, Step, Turn } from "../shared/ask.ts";
 import type { RunLines } from "./exec.ts";
 
 // Web research and tool runs take minutes.
@@ -10,8 +10,8 @@ const SYSTEM_PROMPT =
   "You answer questions in a chat window. Use tools (web search, fetch, shell, MCP) whenever they help. Be direct. Answers render as Markdown, tables included. To show an image file, embed it as a Markdown image with its absolute path, e.g. ![screenshot](/tmp/shot.png).";
 
 // Same setup as an agent in the main window: user settings, skills, plugins, MCP and full tooling,
-// with no permission prompts (nobody can answer them). Costs ~2 s per question over a bare call.
-// No saved session: the thread is resent each turn.
+// with no permission prompts (nobody can answer them). Costs ~2 s per new process over a bare call.
+// No saved session on disk: a thread's process lives in memory only (see createAsk).
 export function claudeArgs(model?: string, effort?: Effort): string[] {
   return [
     "-p",
@@ -31,7 +31,7 @@ export function claudeArgs(model?: string, effort?: Effort): string[] {
   ];
 }
 
-function withFiles(t: Turn): string {
+export function withFiles(t: Pick<Turn, "text" | "files">): string {
   if (!t.files?.length) return t.text;
   return `${t.text}\n\n[Attached files, read them with your tools:\n${t.files.map((f) => `- ${f.path}`).join("\n")}]`;
 }
@@ -107,67 +107,155 @@ export async function embedImages(answer: string, home = os.homedir()): Promise<
 
 const userMessage = (text: string) => `${JSON.stringify({ type: "user", message: { role: "user", content: text } })}\n`;
 
-// control.steer is set while claude still reads stdin. Claude Code folds a message sent mid-turn
-// into the running turn; one that arrives after the result would start a new turn, so stdin closes
-// at the first result and steer then reports false.
+// control.steer is set while the turn runs; control.stop ends it.
 export type Control = { steer?: (text: string) => boolean; stop?: () => void };
+export type AskInput = { threadId?: string; turns: Turn[]; model?: string; effort?: Effort };
+export type Answer = { answer: string; images: Record<string, string>; stopped: boolean };
 
+// An idle thread keeps its claude this long, so a follow-up sees earlier tool results.
+const IDLE_MS = 15 * 60_000;
+
+type Turning = {
+  steps: Step[];
+  control: Control;
+  final?: { result?: string; isError?: boolean };
+  steered?: boolean;
+  stopped?: boolean;
+  error?: string;
+  timer: NodeJS.Timeout;
+  settle: (r: Promise<Answer>) => void;
+};
+// seen: turns this process has in context (question + answer per finished turn).
+// retired: stdin closed, no new turns; it exits after the current one.
+type Proc = { threadId?: string; key: string; seen: number; job: Turning | null; io?: Io; retired?: boolean; idle?: NodeJS.Timeout; lastLine: string };
+type Io = { write(s: string): void; end(): void; kill(): void };
+
+// One claude per thread, fed over stream-json stdin. A new process (thread resent as text) starts when
+// there is none, the model/effort or the thread changed (Clear, app reload), or the old one is busy.
+// A steer can land just as a turn ends and start one more turn, so a steered process is retired
+// after its turn and the last result wins; the next question gets a fresh process.
 export function createAsk(run: RunLines, claude: string) {
-  return async ({ turns, model, effort }: { turns: Turn[]; model?: string; effort?: Effort }, steps: Step[] = [], control: Control = {}) => {
-    // The last result wins: a steer written just before the turn ended runs as one more turn.
-    let final: { result?: string; isError?: boolean } = {};
-    let lastLine = "";
-    let close = () => {};
-    let stopped = false;
-    // Without the agent's effort, thinking is off: the CLI default makes headless calls ~30x slower.
-    const { code, stderr } = await run(claude, claudeArgs(model, effort), {
-      timeoutMs: TIMEOUT_MS,
-      input: userMessage(transcript(turns)),
-      cwd: os.homedir(),
-      onStdin: (io) => {
-        control.stop = () => {
-          stopped = true;
-          io.kill();
-        };
-        let open = true;
-        close = () => {
-          if (open) io.end();
-          open = false;
-          control.steer = undefined;
-        };
-        control.steer = (text) => {
-          if (!open) return false;
-          io.write(userMessage(text));
-          steps.push({ kind: "steer", text });
-          return true;
-        };
-      },
-      env: effort ? process.env : { ...process.env, MAX_THINKING_TOKENS: "0" },
-      onLine: (line) => {
-        if (!line.trim()) return;
-        lastLine = line;
-        try {
-          const r = applyEvent(steps, JSON.parse(line) as Event);
-          if (r.result !== undefined) {
-            final = r;
-            close();
-          }
-        } catch {
-          // Not JSON (a stray log line): ignore.
-        }
-      },
-    });
-    close();
-    control.stop = undefined;
-    if (stopped) {
-      const said = steps.filter((x): x is Extract<Step, { kind: "text" }> => x.kind === "text").map((x) => x.text);
+  const threads = new Map<string, Proc>();
+
+  const retire = (p: Proc) => {
+    if (p.threadId && threads.get(p.threadId) === p) threads.delete(p.threadId);
+    clearTimeout(p.idle);
+    if (!p.retired) p.io?.end();
+    p.retired = true;
+  };
+
+  async function result(job: Turning): Promise<Answer> {
+    if (job.stopped) {
+      const said = job.steps.filter((x): x is Extract<Step, { kind: "text" }> => x.kind === "text").map((x) => x.text);
       return { answer: said.join("\n\n"), images: {}, stopped: true };
     }
-    if (final.result === undefined) throw new Error(stderr.trim().split("\n")[0] || `claude exited with code ${code}: ${lastLine.slice(0, 200)}`);
-    if (final.isError) throw new Error(final.result || "claude returned an error");
-    const answer = final.result.trim();
+    if (job.error) throw new Error(job.error);
+    if (job.final?.isError) throw new Error(job.final.result || "claude returned an error");
+    const answer = (job.final?.result ?? "").trim();
     return { answer, images: await embedImages(answer), stopped: false };
+  }
+
+  const finish = (p: Proc, job: Turning, error?: string) => {
+    if (p.job !== job) return;
+    clearTimeout(job.timer);
+    p.job = null;
+    job.control.steer = job.control.stop = undefined;
+    if (job.final?.result === undefined && !job.error) job.error = error;
+    job.settle(result(job));
+    if (!p.retired && p.threadId && threads.get(p.threadId) === p) p.idle = setTimeout(() => retire(p), IDLE_MS);
+    else retire(p);
   };
+
+  const onLine = (p: Proc, line: string) => {
+    if (!line.trim()) return;
+    p.lastLine = line;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return; // Not JSON (a stray log line).
+    }
+    const job = p.job;
+    if (!job) return; // A retired process's extra turn.
+    const r = applyEvent(job.steps, event as Event);
+    if (r.result === undefined) return;
+    job.final = r;
+    p.seen += 2;
+    if (job.steered) retire(p);
+    else finish(p, job);
+  };
+
+  // Starts claude for p; p already holds the turn, since events can follow at once.
+  function launch(p: Proc, model: string | undefined, effort: Effort | undefined, first: string) {
+    // Without the agent's effort, thinking is off: the CLI default makes headless calls ~30x slower.
+    run(claude, claudeArgs(model, effort), {
+      input: first,
+      cwd: os.homedir(),
+      env: effort ? process.env : { ...process.env, MAX_THINKING_TOKENS: "0" },
+      onStdin: (io) => void (p.io = io),
+      onLine: (line) => onLine(p, line),
+    }).then(
+      ({ code, stderr }) => exit(p, stderr.trim().split("\n")[0] || `claude exited with code ${code}: ${p.lastLine.slice(0, 200)}`),
+      (err) => exit(p, err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  const exit = (p: Proc, error: string) => {
+    p.retired = true;
+    retire(p);
+    if (p.job) finish(p, p.job, error);
+  };
+
+  function ask({ threadId, turns, model, effort }: AskInput, steps: Step[] = [], control: Control = {}): Promise<Answer> {
+    return new Promise((resolve) => {
+      const key = `${model ?? ""}|${effort ?? ""}`;
+      const old = threadId ? threads.get(threadId) : undefined;
+      const reuse = old && !old.job && !old.retired && old.key === key && old.seen === turns.length - 1;
+      if (old && !old.job && !reuse) retire(old);
+      // A busy thread (a second window asking at once) gets a one-off process.
+      const keep = threadId && !old?.job ? threadId : undefined;
+      const p: Proc = reuse ? old : { threadId: keep, key, seen: turns.length - 1, job: null, lastLine: "" };
+      const job: Turning = {
+        steps,
+        control,
+        settle: resolve,
+        // Web research and tool runs take minutes; past that the turn is given up.
+        timer: setTimeout(() => {
+          job.error = `claude timed out after ${TIMEOUT_MS / 1000} s`;
+          p.io?.kill();
+        }, TIMEOUT_MS),
+      };
+      p.job = job;
+      control.stop = () => {
+        job.stopped = true;
+        p.io?.kill();
+      };
+      control.steer = (text) => {
+        if (p.job !== job || p.retired) return false;
+        p.io?.write(userMessage(text));
+        steps.push({ kind: "steer", text });
+        job.steered = true;
+        return true;
+      };
+      if (reuse) {
+        clearTimeout(p.idle);
+        p.io?.write(userMessage(withFiles(turns[turns.length - 1])));
+        return;
+      }
+      if (keep) threads.set(keep, p);
+      launch(p, model, effort, userMessage(transcript(turns)));
+    });
+  }
+
+  // Plugin unload: no claude outlives it.
+  const dispose = () => {
+    for (const p of threads.values()) {
+      clearTimeout(p.idle);
+      p.io?.kill();
+    }
+    threads.clear();
+  };
+  return { ask, dispose };
 }
 
 type Job =
@@ -175,44 +263,47 @@ type Job =
   | { status: "done"; steps: Step[]; answer: string; images: Record<string, string>; stopped: boolean }
   | { status: "error"; steps: Step[]; error: string };
 
-export function createJobs(answer: (input: { turns: Turn[]; model?: string; effort?: Effort }, steps: Step[], control: Control) => Promise<{ answer: string; images: Record<string, string>; stopped: boolean }>) {
-  const jobs = new Map<string, Job>();
-  const controls = new Map<string, Control>();
+// A finished job nobody polls (app reload, lost connection) is dropped after this long.
+const KEEP_FINISHED_MS = 60 * 60_000;
+
+export function createJobs(answer: (input: AskInput, steps: Step[], control: Control) => Promise<Answer>, now = Date.now) {
+  const jobs = new Map<string, { job: Job; control: Control; finishedAt?: number }>();
   let next = 0;
+  const end = (jobId: string, job: Job) => {
+    const entry = jobs.get(jobId);
+    if (entry) Object.assign(entry, { job, finishedAt: now() });
+  };
   return {
-    start(input: { turns: Turn[]; model?: string; effort?: Effort }) {
-      const jobId = `${Date.now()}-${next++}`;
+    start(input: AskInput) {
+      for (const [id, e] of jobs) if (e.finishedAt !== undefined && now() - e.finishedAt > KEEP_FINISHED_MS) jobs.delete(id);
+      const jobId = `${now()}-${next++}`;
       // steps fills in while claude runs; poll hands out the live list.
       const steps: Step[] = [];
       const control: Control = {};
-      controls.set(jobId, control);
-      jobs.set(jobId, { status: "running", steps });
+      jobs.set(jobId, { job: { status: "running", steps }, control });
       answer(input, steps, control).then(
-        ({ answer, images, stopped }) => jobs.set(jobId, { status: "done", steps, answer, images, stopped }),
+        ({ answer, images, stopped }) => end(jobId, { status: "done", steps, answer, images, stopped }),
         (err) => {
           console.error("[paseo-ask] ask failed:", err);
-          jobs.set(jobId, { status: "error", steps, error: err instanceof Error ? err.message : String(err) });
+          end(jobId, { status: "error", steps, error: err instanceof Error ? err.message : String(err) });
         },
       );
       return { jobId };
     },
     stop({ jobId }: { jobId: string }) {
-      const stop = controls.get(jobId)?.stop;
+      const stop = jobs.get(jobId)?.control.stop;
       stop?.();
       return { stopped: !!stop };
     },
-    steer({ jobId, text }: { jobId: string; text: string }) {
-      return { accepted: controls.get(jobId)?.steer?.(text) ?? false };
+    steer({ jobId, text, files }: { jobId: string; text: string; files?: AskFile[] }) {
+      return { accepted: jobs.get(jobId)?.control.steer?.(withFiles({ text, files })) ?? false };
     },
     // A finished job is handed out once, then forgotten.
     poll({ jobId }: { jobId: string }): Job {
-      const job = jobs.get(jobId);
-      if (!job) return { status: "error", steps: [], error: "unknown job (daemon or plugin restarted?)" };
-      if (job.status !== "running") {
-        jobs.delete(jobId);
-        controls.delete(jobId);
-      }
-      return job;
+      const entry = jobs.get(jobId);
+      if (!entry) return { status: "error", steps: [], error: "unknown job (daemon or plugin restarted?)" };
+      if (entry.job.status !== "running") jobs.delete(jobId);
+      return entry.job;
     },
   };
 }

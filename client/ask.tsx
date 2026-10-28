@@ -2,7 +2,7 @@ import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client"
 import { Icon, Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Image, Modal, Platform, Pressable, type TextStyle, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
+import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, pollUntilDone, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
 import { enterAction, sendAction } from "../shared/send.ts";
 import { autoGrow, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
@@ -12,13 +12,15 @@ import { FloatingWindow } from "./window.tsx";
 // One store for the whole app, on globalThis: each daemon with the plugin runs its own copy of this
 // module, and the sidebar row hosting the window switches copies when the main window moves to
 // another daemon's workspace. A module-level store would close the window and drop the draft then.
-// Font size is also saved per app (web/desktop only); the thread lasts until reload.
+// Font size and the thread are also saved per app (web/desktop only).
+// threadId: the daemon keeps one claude per thread id (server/ask.ts createAsk).
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
 // live: steps of the answer in progress; jobId: its daemon job, for steering.
 // unread: an answer arrived while the window was closed (dot on the Ask buttons).
 // queued: questions sent with the "queue" behavior, asked one by one after the current answer.
 type Queued = { text: string; files: AskFile[] };
 type State = {
+  threadId: string;
   queued: Queued[];
   open: boolean;
   agentId: string | null;
@@ -39,7 +41,7 @@ const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
 // stop: set by the mounted window, so Escape can stop from outside it.
 type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void };
-const DEFAULTS: State = { queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
+const DEFAULTS: State = { threadId: Math.random().toString(36).slice(2), queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
 // The thread is also kept in the app's storage (web/desktop), so an app reload keeps it too.
 // shortcut: answer images (data: URIs) aren't saved, so after an app reload they show as links; save them if missed.
 const THREAD_KEY = "paseo-ask:thread";
@@ -47,14 +49,12 @@ const MAX_SAVED_TURNS = 60;
 // One key for every plugin version: a deploy reloads the plugin and must keep the open window
 // and the thread (an answer still running dies with the daemon side). New fields get their defaults;
 // never rename this key.
-// __paseoAskStoreV3/V4 are what 8d0450f and earlier used.
 const g = globalThis as unknown as Record<string, Store | undefined>;
-const legacy = g.__paseoAskStoreV4 ?? g.__paseoAskStoreV3;
 const store: Store = (g.__paseoAskStore ??= {
-  state: { ...DEFAULTS, ...(legacy?.state ?? { turns: load(THREAD_KEY, { turns: [] as Turn[] }).turns }) },
-  listeners: legacy?.listeners ?? new Set(),
+  state: { ...DEFAULTS, turns: load(THREAD_KEY, { turns: [] as Turn[] }).turns },
+  listeners: new Set(),
   // Image data: URIs by daemon path: attachment previews, and images answers embed.
-  previews: legacy?.previews ?? new Map(),
+  previews: new Map(),
 });
 store.state = { ...DEFAULTS, ...store.state };
 const previews = store.previews;
@@ -91,7 +91,6 @@ const FONT_MIN = 12;
 const FONT_MAX = 40;
 const THREAD_ID = "paseo-ask-thread";
 const INPUT_ID = "paseo-ask-input";
-const POLL_MS = 500;
 
 // Mount once, outside any Pressable: modals are React portals, so their events bubble up the React tree.
 // Own window everywhere: the host Modal's header is too tall on phones and its desktop size is fixed.
@@ -159,9 +158,6 @@ function AskBody({ theme }: PluginHostProps) {
     store.stop = stop;
   });
 
-  const withPaths = (text: string, list: AskFile[]) =>
-    list.length ? `${text}\n\n[Attached files, read them with your tools:\n${list.map((f) => `- ${f.path}`).join("\n")}]` : text;
-
   // Send and its alternate act like Paseo's composer: see shared/send.ts.
   async function submit(alternate: boolean) {
     const text = draft.trim();
@@ -184,7 +180,7 @@ function AskBody({ theme }: PluginHostProps) {
     const jobId = current().jobId;
     if (!jobId) return;
     try {
-      const { accepted } = await steerRpc({ jobId, text: withPaths(text, sent) });
+      const { accepted } = await steerRpc({ jobId, text, files: sent });
       if (!accepted) return set({ error: "The answer had already finished; send it again as a new question." });
       setDraft("");
       setFiles([]);
@@ -198,18 +194,12 @@ function AskBody({ theme }: PluginHostProps) {
     set({ turns: next, pending: true, error: null });
     try {
       // Steps are display-only; resend just the text and files.
-      const { jobId } = await start({ turns: forClaude(next), model, effort });
+      const { jobId } = await start({ threadId: current().threadId, turns: forClaude(next), model, effort });
       set({ jobId });
-      for (;;) {
-        await new Promise((r) => setTimeout(r, POLL_MS));
-        const job = await poll({ jobId });
-        set({ live: job.steps ?? [] });
-        if (job.status === "running") continue;
-        if (job.status === "error") throw new Error(job.error ?? "failed");
-        for (const [p, uri] of Object.entries(job.images ?? {})) previews.set(p, uri);
-        set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps, ...(job.stopped ? { stopped: true } : {}) }], unread: !current().open });
-        break;
-      }
+      const job = await pollUntilDone(() => poll({ jobId }), (j) => set({ live: j.steps ?? [] }));
+      if (job.status === "error") throw new Error(job.error ?? "failed");
+      for (const [p, uri] of Object.entries(job.images ?? {})) previews.set(p, uri);
+      set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps, ...(job.stopped ? { stopped: true } : {}) }], unread: !current().open });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     } finally {

@@ -4,11 +4,12 @@ import { resolveBin, runLines } from "./server/exec.ts";
 import { askPoll, askStart, askSteer, askStop, askUpload } from "./shared/ask.ts";
 
 export default function contribute(server: PluginServerContext) {
-  const jobs = createJobs(createAsk(runLines, resolveBin("claude")));
+  const asker = createAsk(runLines, resolveBin("claude"));
+  const jobs = createJobs(asker.ask);
   server.handle(askStart, (input) => jobs.start(input));
   server.handle(askPoll, (input) => jobs.poll(input));
   server.handle(askSteer, (input) => jobs.steer(input));
   server.handle(askStop, (input) => jobs.stop(input));
   server.handle(askUpload, (input) => saveUpload(input));
-  return () => {};
+  return asker.dispose;
 }

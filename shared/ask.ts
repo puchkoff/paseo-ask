@@ -32,9 +32,10 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 // Start + poll: the app times plugin RPCs out after 60 s, and tool-using answers take minutes.
+// threadId: lets the daemon keep one claude per thread (server/ask.ts createAsk).
 export const askStart = defineRpc({
   name: "ask.start",
-  input: z.object({ turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
+  input: z.object({ threadId: z.string().max(100).optional(), turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
   output: z.object({ jobId: z.string() }),
 });
 
@@ -49,7 +50,7 @@ export const askUpload = defineRpc({
 // accepted: false once the turn has ended; send it as a new question then.
 export const askSteer = defineRpc({
   name: "ask.steer",
-  input: z.object({ jobId: z.string(), text: z.string().min(1).max(100_000) }),
+  input: z.object({ jobId: z.string(), text: z.string().max(100_000), files: z.array(file).max(20).optional() }),
   output: z.object({ accepted: z.boolean() }),
 });
 
@@ -86,4 +87,27 @@ export function claudeModelOf(agent: { provider: string; model: string | null })
 export function claudeEffortOf(agent: { provider: string; thinkingOptionId: string | null }): Effort | undefined {
   const id = agent.thinkingOptionId;
   return agent.provider.split("/")[0] === "claude" && (EFFORTS as readonly string[]).includes(id ?? "") ? (id as Effort) : undefined;
+}
+
+// A failed poll (lost connection, app in background) is retried until giveUpMs pass without one
+// that works; the job keeps running on the daemon meanwhile.
+export async function pollUntilDone<J extends { status: string }>(
+  poll: () => Promise<J>,
+  onPoll: (job: J) => void,
+  { everyMs = 500, giveUpMs = 60_000, now = Date.now, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)) } = {},
+): Promise<J> {
+  let lastOk = now();
+  for (;;) {
+    await sleep(everyMs);
+    let job: J;
+    try {
+      job = await poll();
+    } catch (err) {
+      if (now() - lastOk > giveUpMs) throw err;
+      continue;
+    }
+    lastOk = now();
+    onPoll(job);
+    if (job.status !== "running") return job;
+  }
 }
