@@ -5,7 +5,7 @@ declare const localStorage: { getItem(key: string): string | null; setItem(key: 
 type DomFile = { name: string; type: string };
 type DomInput = { type: string; multiple: boolean; files: DomFile[] | null; onchange: (() => void) | null; click(): void };
 type PasteEvent = { clipboardData: { files: DomFile[] } | null; preventDefault(): void };
-type DomRect = { left: number; bottom: number; width: number; height: number };
+type DomRect = { left: number; right: number; top: number; bottom: number; width: number; height: number };
 type DomEl = {
   id: string;
   isContentEditable?: boolean;
@@ -16,6 +16,8 @@ type DomEl = {
 };
 type DomButton = {
   textContent: string;
+  offsetWidth: number;
+  offsetHeight: number;
   style: Record<string, string>;
   setAttribute(name: string, value: string): void;
   addEventListener(type: "mousedown" | "click", fn: (e: { preventDefault(): void; stopPropagation(): void }) => void): void;
@@ -25,7 +27,7 @@ type DomSelection = {
   rangeCount: number;
   isCollapsed: boolean;
   toString(): string;
-  getRangeAt(i: number): { getBoundingClientRect(): DomRect; commonAncestorContainer: { parentElement: DomEl | null } & Partial<DomEl> };
+  getRangeAt(i: number): { getBoundingClientRect(): DomRect; getClientRects(): ArrayLike<DomRect>; commonAncestorContainer: { parentElement: DomEl | null } & Partial<DomEl> };
   removeAllRanges(): void;
 };
 type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange";
@@ -45,6 +47,8 @@ declare class FileReader {
   readAsDataURL(file: DomFile): void;
 }
 type PointerLike = { clientX: number; clientY: number };
+declare const innerWidth: number;
+declare const innerHeight: number;
 declare const window: {
   addEventListener(type: "pointermove" | "pointerup", fn: (e: PointerLike) => void): void;
   removeEventListener(type: "pointermove" | "pointerup", fn: (e: PointerLike) => void): void;
@@ -154,7 +158,9 @@ export function watchSelection(colors: SelectionColors, onAsk: (text: string, ag
     const node = range.commonAncestorContainer;
     const el = (node.tagName ? node : node.parentElement) as DomEl | null;
     if (!el || el.closest("input, textarea, [contenteditable=true], #paseo-ask-window")) return;
-    const r = range.getBoundingClientRect();
+    // Last line box = where the selection ends; the button sits just below its right end.
+    const rects = Array.from(range.getClientRects()).filter((x) => x.width || x.height);
+    const r = rects[rects.length - 1] ?? range.getBoundingClientRect();
     if (!r.width && !r.height) return;
     const agentId = agentOf(el);
     const b = document.createElement("button");
@@ -162,8 +168,8 @@ export function watchSelection(colors: SelectionColors, onAsk: (text: string, ag
     b.setAttribute("aria-label", "Ask about the selection");
     Object.assign(b.style, {
       position: "fixed",
-      left: `${Math.max(8, r.left)}px`,
-      top: `${r.bottom + 6}px`,
+      left: `${r.right + 2}px`,
+      top: `${r.bottom + 4}px`,
       zIndex: "2147483647",
       padding: "4px 12px",
       borderRadius: "999px",
@@ -183,6 +189,9 @@ export function watchSelection(colors: SelectionColors, onAsk: (text: string, ag
       onAsk(text, agentId);
     });
     document.body.appendChild(b);
+    // Keep it on screen: pull it in from the right edge, and put it above the end when there's no room below.
+    b.style.left = `${Math.max(8, Math.min(r.right + 2, innerWidth - b.offsetWidth - 8))}px`;
+    if (r.bottom + 4 + b.offsetHeight > innerHeight - 8) b.style.top = `${Math.max(8, r.top - b.offsetHeight - 4)}px`;
     button = b;
   };
   // After mouseup the selection is final; defer one tick so a click that clears it is seen.
