@@ -1,8 +1,8 @@
 # Ask — a Paseo plugin
 
-A floating window for quick questions, answered by Claude on the daemon.
+A side chat for quick questions, answered by Claude on the daemon.
 
-Open it from the "Ask" button in the workspace header (also in a new-agent draft) or in an agent's composer. Follow-ups stay in the same thread. Tool calls show up as they happen, like in the main chat; while Claude works there is a Stop button, and sending follows Paseo's own setting (steer, queue or interrupt) and keys (Enter / Cmd+Enter), like the main composer. The Ask button spins while answering and shows a dot when an answer is ready. On phones it opens full screen; on desktop it can be moved and resized, and you can paste images or attach files. Select text anywhere in Paseo for a small Ask button that quotes it; click an attached image to view it full size.
+Open it from the "Ask" button in the workspace header (also in a new-agent draft) or in an agent's composer, or type `/btw <question>` in an agent's composer: the question goes to Ask, never to the agent. It opens as an "Ask" tab in the right-hand panel next to Files and Changes; Settings → Plugins → paseo-ask → ⋯ → Ask switches it to a floating window (saved per device). "History" reopens any of the last 100 conversations, "New" starts another. Follow-ups stay in the same thread. Tool calls show up as they happen, like in the main chat; while Claude works there is a Stop button, and sending follows Paseo's own setting (steer, queue or interrupt) and keys (Enter / Cmd+Enter), like the main composer. The Ask button spins while answering and shows a dot when an answer is ready. As a floating window it opens full screen on phones; on desktop it can be moved and resized, and you can paste images or attach files. Select text anywhere in Paseo for a small Ask button that quotes it; click an attached image to view it full size.
 
 ![Ask open over the main window, with a tool call](assets/screenshot-overlay.png)
 

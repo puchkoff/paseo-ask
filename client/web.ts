@@ -66,12 +66,14 @@ export function load<T extends object>(key: string, fallback: T): T {
   }
 }
 
-export function save(key: string, value: object): void {
-  if (!isWeb) return;
+// false: storage full or blocked, so the value isn't remembered.
+export function save(key: string, value: object): boolean {
+  if (!isWeb) return false;
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    // Storage full or blocked: the setting just isn't remembered.
+    return false;
   }
 }
 

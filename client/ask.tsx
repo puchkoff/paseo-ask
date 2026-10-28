@@ -5,6 +5,7 @@ import { ActivityIndicator, Image, Modal, Platform, Pressable, type TextStyle, t
 import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, pollUntilDone, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
 import { enterAction, sendAction } from "../shared/send.ts";
+import { type Session, sessionTitle, upsertSession } from "../shared/sessions.ts";
 import { autoGrow, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { Steps } from "./steps.tsx";
 import { FloatingWindow } from "./window.tsx";
@@ -18,8 +19,15 @@ import { FloatingWindow } from "./window.tsx";
 // live: steps of the answer in progress; jobId: its daemon job, for steering.
 // unread: an answer arrived while the window was closed (dot on the Ask buttons).
 // queued: questions sent with the "queue" behavior, asked one by one after the current answer.
+// send: a question to ask as soon as a window or panel is mounted (/btw).
+// sessions: the last 100 threads, newest first, the current one included once it has turns.
+// mode: where Ask opens, the side panel or the floating window (Settings → Ask).
 type Queued = { text: string; files: AskFile[] };
+export type AskMode = "side" | "popup";
 type State = {
+  send: Queued | null;
+  sessions: Session[];
+  mode: AskMode;
   threadId: string;
   queued: Queued[];
   open: boolean;
@@ -38,20 +46,26 @@ type State = {
 const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
-const prefs = load(PREFS_KEY, { fontSize: BASE });
+const prefs = load(PREFS_KEY, { fontSize: BASE, mode: "side" as AskMode });
 // stop: set by the mounted window, so Escape can stop from outside it.
-type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void };
-const DEFAULTS: State = { threadId: Math.random().toString(36).slice(2), queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
-// The thread is also kept in the app's storage (web/desktop), so an app reload keeps it too.
+// panels: mounted side panels; an answer arriving while one shows isn't unread.
+type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string>; stop?: () => void; panels?: number };
+const newId = () => Math.random().toString(36).slice(2);
+// Threads are also kept in the app's storage (web/desktop), so an app reload keeps them too.
 // shortcut: answer images (data: URIs) aren't saved, so after an app reload they show as links; save them if missed.
+// THREAD_KEY: the single thread kept before sessions; read once to seed them.
 const THREAD_KEY = "paseo-ask:thread";
+const SESSIONS_KEY = "paseo-ask:sessions";
 const MAX_SAVED_TURNS = 60;
+const saved = load(SESSIONS_KEY, { sessions: [] as Session[] }).sessions;
+const DEFAULTS: State = { threadId: newId(), send: null, sessions: saved, queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
 // One key for every plugin version: a deploy reloads the plugin and must keep the open window
 // and the thread (an answer still running dies with the daemon side). New fields get their defaults;
 // never rename this key.
 const g = globalThis as unknown as Record<string, Store | undefined>;
 const store: Store = (g.__paseoAskStore ??= {
-  state: { ...DEFAULTS, turns: load(THREAD_KEY, { turns: [] as Turn[] }).turns },
+  // Reopens the newest session.
+  state: saved.length ? { ...DEFAULTS, threadId: saved[0].id, turns: saved[0].turns } : { ...DEFAULTS, turns: load(THREAD_KEY, { turns: [] as Turn[] }).turns },
   listeners: new Set(),
   // Image data: URIs by daemon path: attachment previews, and images answers embed.
   previews: new Map(),
@@ -59,20 +73,37 @@ const store: Store = (g.__paseoAskStore ??= {
 store.state = { ...DEFAULTS, ...store.state };
 const previews = store.previews;
 const current = () => store.state;
+// A store from before sessions (kept across a deploy) or the old saved thread becomes the first session.
+if (!store.state.sessions.length && store.state.turns.length) store.state.sessions = upsertSession([], store.state.threadId, store.state.turns, Date.now());
+
+// Full when it fits; otherwise without tool steps of other sessions, then without other sessions.
+function saveSessions({ sessions, threadId }: State) {
+  const trimmed = sessions.map((x) => ({ ...x, turns: x.turns.slice(-MAX_SAVED_TURNS) }));
+  const bare = trimmed.map((x) => (x.id === threadId ? x : { ...x, turns: x.turns.map(({ steps: _steps, ...t }) => t) }));
+  save(SESSIONS_KEY, { sessions: trimmed }) || save(SESSIONS_KEY, { sessions: bare }) || save(SESSIONS_KEY, { sessions: bare.filter((x) => x.id === threadId) });
+}
 function set(patch: Partial<State>) {
   store.state = { ...store.state, ...patch };
-  if ("fontSize" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize });
-  if ("turns" in patch) save(THREAD_KEY, { turns: store.state.turns.slice(-MAX_SAVED_TURNS) });
+  if ("fontSize" in patch || "mode" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize, mode: store.state.mode });
+  if ("turns" in patch) {
+    store.state.sessions = upsertSession(store.state.sessions, store.state.threadId, store.state.turns, Date.now());
+    saveSessions(store.state);
+  }
   for (const l of store.listeners) l();
 }
 const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.listeners.delete(l));
 const useAskState = () => useSyncExternalStore(subscribe, current);
 
 export const setAskOpen = (open: boolean) => set(open ? { open, unread: false } : { open });
+export const askMode = () => current().mode;
+export const setAskMode = (mode: AskMode) => set({ mode });
+export const useAskMode = () => useAskState().mode;
 // Escape: stops an answer in progress, like Paseo's Escape interrupts an agent; otherwise closes.
 export const escapeAsk = () => (current().pending && store.stop ? store.stop() : setAskOpen(false));
-// seed: text put before the draft (a quoted selection).
-export const openAsk = (agentId: string | null, seed = "") => set({ open: true, unread: false, agentId, draft: seed + current().draft });
+// seed: text put before the draft (a quoted selection). send: asked right away (/btw).
+// popup: false when the side panel shows it instead of the floating window.
+export const openAsk = (agentId: string | null, seed = "", send = "", popup = true) =>
+  set({ ...(popup ? { open: true } : {}), unread: false, agentId, draft: seed + current().draft, ...(send ? { send: { text: send, files: [] } } : {}) });
 // For the Ask buttons' icon: a spinner while answering, a dot when an unseen answer is ready.
 export const useAskBadge = () => {
   const { pending, unread } = useAskState();
@@ -103,6 +134,19 @@ export function AskModal(props: PluginHostProps) {
   ) : null;
 }
 
+// The side panel (explorer tab): the same thread as the window, in every workspace.
+export function AskPanel(props: PluginHostProps) {
+  useEffect(() => {
+    store.panels = (store.panels ?? 0) + 1;
+    set({ unread: false });
+    return () => void (store.panels = (store.panels ?? 1) - 1);
+  }, []);
+  return (
+    <View style={{ flex: 1, padding: 12, backgroundColor: props.theme.colors.surface0 }}>
+      <AskBody {...props} />
+    </View>
+  );
+}
 
 function AskBody({ theme }: PluginHostProps) {
   const start = useRpc(askStart);
@@ -133,7 +177,21 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
   useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
-  const { turns, live, queued, pending, error, fontSize, agentId } = useAskState();
+  const { turns, live, queued, pending, error, fontSize, agentId, send, sessions, threadId } = useAskState();
+  const [history, setHistory] = useState(false);
+  // /btw: the first mounted window or panel asks it; others see send already taken.
+  useEffect(() => {
+    const q = current().send;
+    if (!q) return;
+    set({ send: null });
+    if (current().pending) set({ queued: [...current().queued, q] });
+    else void ask(q);
+  }, [send]);
+  const busy = pending || queued.length > 0;
+  const openSession = (x: Session) => {
+    set({ threadId: x.id, turns: x.turns, error: null });
+    setHistory(false);
+  };
   const [scrolled, setScrolled] = useState(false);
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
@@ -199,7 +257,7 @@ function AskBody({ theme }: PluginHostProps) {
       const job = await pollUntilDone(() => poll({ jobId }), (j) => set({ live: j.steps ?? [] }));
       if (job.status === "error") throw new Error(job.error ?? "failed");
       for (const [p, uri] of Object.entries(job.images ?? {})) previews.set(p, uri);
-      set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps, ...(job.stopped ? { stopped: true } : {}) }], unread: !current().open });
+      set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps, ...(job.stopped ? { stopped: true } : {}) }], unread: !current().open && !store.panels });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -302,12 +360,29 @@ function AskBody({ theme }: PluginHostProps) {
         <View style={s.spacer} />
         {chip("A−", false, () => set({ fontSize: fontSize - 1 }), "Smaller text", fontSize <= FONT_MIN)}
         {chip("A+", false, () => set({ fontSize: fontSize + 1 }), "Bigger text", fontSize >= FONT_MAX)}
-        {turns.length > 0 && !pending ? chip("Clear", false, () => set({ turns: [], error: null }), "Clear conversation") : null}
+        {sessions.length ? chip("History", history, () => setHistory(!history), "Past conversations", busy) : null}
+        {turns.length > 0 && !busy ? chip("New", false, () => (set({ threadId: newId(), turns: [], error: null }), setHistory(false)), "New conversation") : null}
       </View>
+      {history ? (
+        <ScrollView style={s.list}>
+          {sessions.map((x) => (
+            <Pressable
+              key={x.id}
+              accessibilityRole="button"
+              accessibilityState={{ selected: x.id === threadId }}
+              onPress={() => openSession(x)}
+              style={{ paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: x.id === threadId ? c.surface2 : undefined }}
+            >
+              <Text style={{ color: c.foreground, fontSize: small }} numberOfLines={1}>{sessionTitle(x)}</Text>
+              <Text style={s.hint}>{new Date(x.at).toLocaleString()} · {x.turns.length} messages</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : null}
       {/* Opens already scrolled to the end: the first scroll jumps, hidden until it lands; later ones animate. */}
       <ScrollView
         ref={scroll}
-        style={[s.list, scrolled ? null : { opacity: 0 }]}
+        style={[s.list, scrolled ? null : { opacity: 0 }, history ? { display: "none" } : null]}
         onContentSizeChange={() => {
           scroll.current?.scrollToEnd({ animated: scrolled });
           if (!scrolled) setScrolled(true);
