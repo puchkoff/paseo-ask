@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { ActivityIndicator, Image, Modal, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { type AskFile, askPoll, askStart, askUpload, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
-import { load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { autoGrow, load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { FloatingWindow } from "./window.tsx";
 
 // Module-level so the thread, settings and a running request survive closing the window,
@@ -36,6 +36,7 @@ export const quote = (text: string) => `${text.split("\n").map((l) => `> ${l}`).
 const FONT_MIN = 12;
 const FONT_MAX = 40;
 const THREAD_ID = "paseo-ask-thread";
+const INPUT_ID = "paseo-ask-input";
 const POLL_MS = 500;
 
 // Mount once, outside any Pressable: modals are React portals, so their events bubble up the React tree.
@@ -95,6 +96,10 @@ function AskBody({ theme }: PluginHostProps) {
   }, [seed]);
   const scroll = useRef<NativeScrollView>(null);
   useEffect(() => setZoom(THREAD_ID, fontSize / BASE), [fontSize]);
+  // The input grows with its text up to half the window body.
+  const [bodyHeight, setBodyHeight] = useState(0);
+  const maxInput = bodyHeight ? Math.round(bodyHeight / 2) : 160;
+  useEffect(() => autoGrow(INPUT_ID, maxInput), [draft, maxInput, fontSize]);
 
   async function send() {
     const text = draft.trim();
@@ -158,7 +163,7 @@ function AskBody({ theme }: PluginHostProps) {
       input: {
         flex: 1,
         minHeight: 44,
-        maxHeight: 160,
+        maxHeight: maxInput,
         borderWidth: 1,
         borderColor: c.border,
         borderRadius: 8,
@@ -170,7 +175,7 @@ function AskBody({ theme }: PluginHostProps) {
       send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 11, opacity: pending ? 0.5 : 1 },
       sendText: { color: c.accentForeground, fontSize: 15, fontWeight: "600" as const },
     }),
-    [c, pending, fontSize],
+    [c, pending, fontSize, maxInput],
   );
 
   const fileChip = (f: AskFile, onRemove?: () => void) => {
@@ -200,7 +205,7 @@ function AskBody({ theme }: PluginHostProps) {
   );
 
   return (
-    <View style={s.root}>
+    <View style={s.root} onLayout={(e) => setBodyHeight(e.nativeEvent.layout.height)}>
       {lightbox ? (
         <Modal transparent visible onRequestClose={() => setLightbox(null)}>
           <Pressable accessibilityRole="button" accessibilityLabel="Close image" onPress={() => setLightbox(null)} style={s.lightbox}>
@@ -240,6 +245,7 @@ function AskBody({ theme }: PluginHostProps) {
           </Pressable>
         ) : null}
         <TextInput
+          nativeID={INPUT_ID}
           style={s.input}
           value={draft}
           onChangeText={setDraft}

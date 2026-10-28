@@ -30,7 +30,7 @@ type DomSelection = {
 };
 type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange";
 declare const document: {
-  getElementById(id: string): { style: Record<string, string> } | null;
+  getElementById(id: string): { style: Record<string, string>; scrollHeight: number } | null;
   createElement(tag: "input"): DomInput;
   createElement(tag: "button"): DomButton;
   body: { appendChild(el: DomButton): void };
@@ -202,4 +202,15 @@ export function watchSelection(colors: SelectionColors, onAsk: (text: string, ag
     document.removeEventListener("selectionchange", onChange);
     document.removeEventListener("scroll", hide, true);
   };
+}
+
+// Web textareas don't grow with their text: size to content, capped at max, scrolling beyond it.
+// Native multiline inputs grow on their own and only need the maxHeight style.
+export function autoGrow(nativeID: string, max: number): void {
+  const el = isWeb ? document.getElementById(nativeID) : null;
+  if (!el) return;
+  el.style.height = "auto";
+  const h = Math.min(el.scrollHeight, max);
+  el.style.height = `${h}px`;
+  el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
 }
