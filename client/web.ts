@@ -5,12 +5,39 @@ declare const localStorage: { getItem(key: string): string | null; setItem(key: 
 type DomFile = { name: string; type: string };
 type DomInput = { type: string; multiple: boolean; files: DomFile[] | null; onchange: (() => void) | null; click(): void };
 type PasteEvent = { clipboardData: { files: DomFile[] } | null; preventDefault(): void };
+type DomRect = { left: number; bottom: number; width: number; height: number };
+type DomEl = {
+  id: string;
+  isContentEditable?: boolean;
+  tagName: string;
+  parentElement: DomEl | null;
+  closest(selector: string): DomEl | null;
+  querySelector(selector: string): DomEl | null;
+};
+type DomButton = {
+  textContent: string;
+  style: Record<string, string>;
+  setAttribute(name: string, value: string): void;
+  addEventListener(type: "mousedown" | "click", fn: (e: { preventDefault(): void; stopPropagation(): void }) => void): void;
+  remove(): void;
+};
+type DomSelection = {
+  rangeCount: number;
+  isCollapsed: boolean;
+  toString(): string;
+  getRangeAt(i: number): { getBoundingClientRect(): DomRect; commonAncestorContainer: { parentElement: DomEl | null } & Partial<DomEl> };
+  removeAllRanges(): void;
+};
+type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange";
 declare const document: {
   getElementById(id: string): { style: Record<string, string> } | null;
   createElement(tag: "input"): DomInput;
-  addEventListener(type: "paste", fn: (e: PasteEvent) => void): void;
-  removeEventListener(type: "paste", fn: (e: PasteEvent) => void): void;
+  createElement(tag: "button"): DomButton;
+  body: { appendChild(el: DomButton): void };
+  addEventListener(type: DocEvent, fn: (e: any) => void, capture?: boolean): void;
+  removeEventListener(type: DocEvent, fn: (e: any) => void, capture?: boolean): void;
 };
+declare function getSelection(): DomSelection | null;
 declare class FileReader {
   result: string | null;
   onload: (() => void) | null;
@@ -98,4 +125,81 @@ export function onPasteFiles(onFiles: (files: Promise<PickedFile[]>) => void): (
   };
   document.addEventListener("paste", handler);
   return () => document.removeEventListener("paste", handler);
+}
+
+export type SelectionColors = { background: string; foreground: string; border: string };
+
+// A small "Ask" button under text selected anywhere in the app (not in inputs or the Ask window).
+// agentId comes from the paseo-ask-pill-<id> marker the composer pill renders in the same agent panel.
+export function watchSelection(colors: SelectionColors, onAsk: (text: string, agentId: string | null) => void): () => void {
+  if (!isWeb) return () => {};
+  let button: DomButton | null = null;
+  const hide = () => {
+    button?.remove();
+    button = null;
+  };
+  const agentOf = (el: DomEl | null): string | null => {
+    for (let n = el; n; n = n.parentElement) {
+      const marker = n.querySelector('[id^="paseo-ask-pill-"]');
+      if (marker) return marker.id.slice("paseo-ask-pill-".length);
+    }
+    return null;
+  };
+  const show = () => {
+    hide();
+    const sel = getSelection();
+    const text = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+    if (!sel || !text || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const el = (node.tagName ? node : node.parentElement) as DomEl | null;
+    if (!el || el.closest("input, textarea, [contenteditable=true], #paseo-ask-window")) return;
+    const r = range.getBoundingClientRect();
+    if (!r.width && !r.height) return;
+    const agentId = agentOf(el);
+    const b = document.createElement("button");
+    b.textContent = "Ask";
+    b.setAttribute("aria-label", "Ask about the selection");
+    Object.assign(b.style, {
+      position: "fixed",
+      left: `${Math.max(8, r.left)}px`,
+      top: `${r.bottom + 6}px`,
+      zIndex: "2147483647",
+      padding: "4px 12px",
+      borderRadius: "999px",
+      border: `1px solid ${colors.border}`,
+      background: colors.background,
+      color: colors.foreground,
+      font: "500 13px system-ui, sans-serif",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+      cursor: "pointer",
+    });
+    // mousedown would clear the selection before click reads it.
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hide();
+      getSelection()?.removeAllRanges();
+      onAsk(text, agentId);
+    });
+    document.body.appendChild(b);
+    button = b;
+  };
+  // After mouseup the selection is final; defer one tick so a click that clears it is seen.
+  const onUp = () => setTimeout(show, 0);
+  const onKey = (e: { key: string }) => (e.key === "Escape" ? hide() : e.key.startsWith("Shift") || e.key.startsWith("Arrow") ? setTimeout(show, 0) : undefined);
+  const onChange = () => {
+    if (getSelection()?.isCollapsed) hide();
+  };
+  document.addEventListener("mouseup", onUp);
+  document.addEventListener("keyup", onKey);
+  document.addEventListener("selectionchange", onChange);
+  document.addEventListener("scroll", hide, true);
+  return () => {
+    hide();
+    document.removeEventListener("mouseup", onUp);
+    document.removeEventListener("keyup", onKey);
+    document.removeEventListener("selectionchange", onChange);
+    document.removeEventListener("scroll", hide, true);
+  };
 }

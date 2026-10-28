@@ -1,7 +1,7 @@
 import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client";
 import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Image, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
 import { type AskFile, askPoll, askStart, askUpload, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
 import { load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
@@ -11,14 +11,15 @@ import { FloatingWindow } from "./window.tsx";
 // and the composer pill can open it.
 // Font size is also saved per app (web/desktop only); the thread lasts until reload.
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
-type State = { open: boolean; agentId: string | null; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
+// seed: text to put in the input on open (a quoted selection).
+type State = { open: boolean; agentId: string | null; seed: string | null; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
 // Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
 const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
-let state: State = { open: false, agentId: null, turns: [], pending: false, error: null, ...prefs };
+let state: State = { open: false, agentId: null, seed: null, turns: [], pending: false, error: null, ...prefs };
 const listeners = new Set<() => void>();
 function set(patch: Partial<State>) {
   state = { ...state, ...patch };
@@ -29,7 +30,8 @@ const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.del
 const useAskState = () => useSyncExternalStore(subscribe, () => state);
 
 export const setAskOpen = (open: boolean) => set({ open });
-export const openAsk = (agentId: string | null) => set({ open: true, agentId });
+export const openAsk = (agentId: string | null, seed: string | null = null) => set({ open: true, agentId, seed });
+export const quote = (text: string) => `${text.split("\n").map((l) => `> ${l}`).join("\n")}\n\n`;
 
 const FONT_MIN = 12;
 const FONT_MAX = 40;
@@ -84,6 +86,13 @@ function AskBody({ theme }: PluginHostProps) {
   const model = agent?.model;
   const effort = agent?.effort;
   const [draft, setDraft] = useState("");
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  const { seed } = useAskState();
+  useEffect(() => {
+    if (seed === null) return;
+    setDraft((d) => seed + d);
+    set({ seed: null });
+  }, [seed]);
   const scroll = useRef<NativeScrollView>(null);
   useEffect(() => setZoom(THREAD_ID, fontSize / BASE), [fontSize]);
 
@@ -139,6 +148,8 @@ function AskBody({ theme }: PluginHostProps) {
       files: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8, alignItems: "center" as const },
       fileChip: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 4, backgroundColor: c.surface1 },
       thumb: { width: 120, height: 80, borderRadius: 6 },
+      lightbox: { flex: 1, backgroundColor: "rgba(0,0,0,0.85)", alignItems: "center" as const, justifyContent: "center" as const, padding: 24 },
+      lightboxImage: { width: "100%" as const, height: "100%" as const },
       fileName: { color: c.foreground, fontSize: 13, maxWidth: 220 },
       attach: { paddingHorizontal: 6, paddingVertical: 10 },
       attachText: { fontSize: 18 },
@@ -166,7 +177,13 @@ function AskBody({ theme }: PluginHostProps) {
     const preview = previews.get(f.path);
     return (
       <View key={f.path} style={s.fileChip}>
-        {preview ? <Image source={{ uri: preview }} style={s.thumb} resizeMode="contain" accessibilityLabel={f.name} /> : <Text style={s.fileName} numberOfLines={1}>📄 {f.name}</Text>}
+        {preview ? (
+          <Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${f.name}`} onPress={() => setLightbox(preview)}>
+            <Image source={{ uri: preview }} style={s.thumb} resizeMode="contain" />
+          </Pressable>
+        ) : (
+          <Text style={s.fileName} numberOfLines={1}>📄 {f.name}</Text>
+        )}
         {onRemove ? (
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${f.name}`} onPress={onRemove} hitSlop={6}>
             <Text style={s.fileName}>✕</Text>
@@ -184,6 +201,13 @@ function AskBody({ theme }: PluginHostProps) {
 
   return (
     <View style={s.root}>
+      {lightbox ? (
+        <Modal transparent visible onRequestClose={() => setLightbox(null)}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close image" onPress={() => setLightbox(null)} style={s.lightbox}>
+            <Image source={{ uri: lightbox }} style={s.lightboxImage} resizeMode="contain" />
+          </Pressable>
+        </Modal>
+      ) : null}
       <View style={s.bar}>
         <Text style={s.link}>{[model ?? "default model", effort].filter(Boolean).join(" · ")}</Text>
         <View style={s.spacer} />

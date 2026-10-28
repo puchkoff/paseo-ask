@@ -1,9 +1,28 @@
-import type { PluginButtonRegistration, PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plugin/client";
-import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { AskModal, openAsk } from "./client/ask.tsx";
+import type { PluginButtonIconProps, PluginButtonRegistration, PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plugin/client";
+import { Icon, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { useEffect } from "react";
+import { View } from "react-native";
+import { AskModal, openAsk, quote } from "./client/ask.tsx";
+import { watchSelection } from "./client/web.ts";
+
+// The pill icon also carries an invisible paseo-ask-pill-<agentId> marker, so a text selection
+// in an agent panel can find which agent it belongs to (client/web.ts watchSelection).
+function PillIcon(props: PluginButtonIconProps) {
+  return (
+    <View>
+      <Icon name="MessageCircle" size={props.size} color={props.color} />
+      {props.context === "agent" ? <View nativeID={`paseo-ask-pill-${props.agentId}`} style={{ position: "absolute", width: 0, height: 0 }} /> : null}
+    </View>
+  );
+}
 
 // The sidebar row also hosts the modal: it is always mounted, and pills have no mounted component of their own.
 function AskItem(props: PluginSidebarItemProps) {
+  const c = props.theme.colors;
+  useEffect(
+    () => watchSelection({ background: c.surface0, foreground: c.foreground, border: c.border }, (text, agentId) => openAsk(agentId, quote(text))),
+    [c.surface0, c.foreground, c.border],
+  );
   return (
     <>
       <SidebarRow icon="MessageCircle" onPress={() => openAsk(null)} />
@@ -28,7 +47,7 @@ export default function contribute(client: PluginClientContext) {
         id: "ask",
         workspaceId: agent.workspaceId,
         agentId: agent.id,
-        button: { title: "Ask a quick question", label: "Ask", icon: "MessageCircle", behavior: { kind: "action", onPress: () => openAsk(agentId) } },
+        button: { title: "Ask a quick question", label: "Ask", icon: PillIcon, behavior: { kind: "action", onPress: () => openAsk(agentId) } },
       }),
     );
   };

@@ -77,6 +77,7 @@ function DesktopWindow({ theme, title, onClose, children }: Props) {
     <Modal transparent visible onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)" }}>
         <View
+          nativeID="paseo-ask-window"
           style={{
             position: "absolute",
             left: rect.x,
