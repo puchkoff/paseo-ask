@@ -19,9 +19,9 @@ export default function contribute(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
   const lifetime = new AbortController();
   const register = (agent: { id: string; workspaceId?: string | null }) => {
-    if (lifetime.signal.aborted || !agent.workspaceId) return;
+    // Agents upsert on every status change; an existing pill stays (its workspace never changes).
+    if (lifetime.signal.aborted || !agent.workspaceId || pills.has(agent.id)) return;
     const agentId = agent.id;
-    pills.get(agent.id)?.remove();
     pills.set(
       agent.id,
       client.addComposerPill({
@@ -57,8 +57,51 @@ export default function contribute(client: PluginClientContext) {
     .catch((error) => {
       if (!lifetime.signal.aborted) console.error("[paseo-ask] agent observation failed", error);
     });
+  // Workspace header button too: Paseo draws plugin pills only for existing agents, never in a new-agent draft.
+  const headers = new Map<string, PluginButtonRegistration>();
+  const addHeader = (workspaceId: string) => {
+    if (lifetime.signal.aborted || headers.has(workspaceId)) return;
+    headers.set(
+      workspaceId,
+      client.addHeaderButton({
+        id: "ask",
+        workspaceId,
+        button: { title: "Ask a quick question", label: "Ask", icon: "MessageCircle", behavior: { kind: "action", onPress: () => openAsk(null) } },
+      }),
+    );
+  };
+  const removeHeaders = () => {
+    for (const h of headers.values()) h.remove();
+    headers.clear();
+  };
+  // workspaces.list takes no signal: release the subscription ourselves, also if cleanup ran first.
+  void client.paseo.workspaces
+    .list({ subscribe: {} })
+    .then(({ subscription }) => {
+      if (lifetime.signal.aborted) return void subscription.release();
+      lifetime.signal.addEventListener("abort", () => void subscription.release());
+      subscription.subscribe({
+        snapshot: ({ entries }) => {
+          removeHeaders();
+          for (const w of entries) addHeader(w.id);
+        },
+        update: (message) => {
+          if (message.type !== "workspace_update") return;
+          const update = message.payload;
+          if (update.kind === "upsert") return addHeader(update.workspace.id);
+          headers.get(update.id)?.remove();
+          headers.delete(update.id);
+        },
+      });
+      return undefined;
+    })
+    .catch((error) => {
+      if (!lifetime.signal.aborted) console.error("[paseo-ask] workspace observation failed", error);
+    });
+
   return () => {
     lifetime.abort();
     removeAll();
+    removeHeaders();
   };
 }
