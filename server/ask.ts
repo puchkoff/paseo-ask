@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Effort, Turn } from "../shared/ask.ts";
@@ -40,9 +39,10 @@ export function transcript(turns: Turn[]): string {
 }
 
 // shortcut: files stay in the OS temp dir until it is cleaned; add expiry if they pile up.
-export async function saveUpload({ name, data }: { name: string; data: string }, root = path.join(os.tmpdir(), "paseo-ask")) {
-  const dir = path.join(root, randomUUID());
-  await mkdir(dir, { recursive: true });
+// mkdtemp: a fresh 0700 dir per upload, so daemons of other Linux users neither collide on a shared
+// parent (EACCES) nor read each other's files.
+export async function saveUpload({ name, data }: { name: string; data: string }, root = os.tmpdir()) {
+  const dir = await mkdtemp(path.join(root, "paseo-ask-"));
   // basename + safe charset: the name comes from the client and must not escape dir.
   const safe = path.basename(name).replace(/[^\p{L}\p{N}._ -]/gu, "_").replace(/^\.+/, "") || "file";
   const file = path.join(dir, safe);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { claudeArgs, createAsk, createJobs, saveUpload, transcript } from "./ask.ts";
@@ -56,10 +56,12 @@ test("files are listed under their turn", () => {
 
 test("upload stays inside its dir and keeps the bytes", async () => {
   const root = path.join(os.tmpdir(), `paseo-ask-test-${process.pid}`);
+  await mkdir(root);
   const f = await saveUpload({ name: "../../etc/passwd", data: Buffer.from("hi").toString("base64") }, root);
   assert.ok(f.path.startsWith(root + path.sep));
   assert.equal(f.name, "passwd");
   assert.equal(await readFile(f.path, "utf8"), "hi");
+  assert.equal((await stat(path.dirname(f.path))).mode & 0o777, 0o700);
   const dot = await saveUpload({ name: "..", data: "" }, root);
   assert.equal(dot.name, "file");
   await rm(root, { recursive: true });
