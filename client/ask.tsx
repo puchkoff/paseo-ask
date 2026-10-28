@@ -138,7 +138,7 @@ function AskBody({ theme }: PluginHostProps) {
       bot: { alignSelf: "stretch" as const },
       files: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8, alignItems: "center" as const },
       fileChip: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 4, backgroundColor: c.surface1 },
-      thumb: { width: 72, height: 72, borderRadius: 6 },
+      thumb: { width: 120, height: 80, borderRadius: 6 },
       fileName: { color: c.foreground, fontSize: 13, maxWidth: 220 },
       attach: { paddingHorizontal: 6, paddingVertical: 10 },
       attachText: { fontSize: 18 },
@@ -166,7 +166,7 @@ function AskBody({ theme }: PluginHostProps) {
     const preview = previews.get(f.path);
     return (
       <View key={f.path} style={s.fileChip}>
-        {preview ? <Image source={{ uri: preview }} style={s.thumb} accessibilityLabel={f.name} /> : <Text style={s.fileName} numberOfLines={1}>📄 {f.name}</Text>}
+        {preview ? <Image source={{ uri: preview }} style={s.thumb} resizeMode="contain" accessibilityLabel={f.name} /> : <Text style={s.fileName} numberOfLines={1}>📄 {f.name}</Text>}
         {onRemove ? (
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${f.name}`} onPress={onRemove} hitSlop={6}>
             <Text style={s.fileName}>✕</Text>
