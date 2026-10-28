@@ -7,30 +7,40 @@ import { mixHex } from "../shared/color.ts";
 import { autoGrow, load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { FloatingWindow } from "./window.tsx";
 
-// Module-level so the thread, settings and a running request survive closing the window,
-// and the composer pill can open it.
+// One store for the whole app, on globalThis: each daemon with the plugin runs its own copy of this
+// module, and the sidebar row hosting the window switches copies when the main window moves to
+// another daemon's workspace. A module-level store would close the window and drop the draft then.
 // Font size is also saved per app (web/desktop only); the thread lasts until reload.
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
-// seed: text to put in the input on open (a quoted selection).
-type State = { open: boolean; agentId: string | null; seed: string | null; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
+type State = { open: boolean; agentId: string | null; draft: string; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
 // Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
 const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
-let state: State = { open: false, agentId: null, seed: null, turns: [], pending: false, error: null, ...prefs };
-const listeners = new Set<() => void>();
+// v1: bump when State changes shape, so a newer copy never reads an older copy's store.
+type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string> };
+const g = globalThis as { __paseoAskStoreV1?: Store };
+const store = (g.__paseoAskStoreV1 ??= {
+  state: { open: false, agentId: null, draft: "", turns: [], pending: false, error: null, ...prefs },
+  listeners: new Set(),
+  // Image previews by daemon path; the daemon only gets bytes once, at upload.
+  previews: new Map(),
+});
+const previews = store.previews;
+const current = () => store.state;
 function set(patch: Partial<State>) {
-  state = { ...state, ...patch };
-  if ("fontSize" in patch) save(PREFS_KEY, { fontSize: state.fontSize });
-  for (const l of listeners) l();
+  store.state = { ...store.state, ...patch };
+  if ("fontSize" in patch) save(PREFS_KEY, { fontSize: store.state.fontSize });
+  for (const l of store.listeners) l();
 }
-const subscribe = (l: () => void) => (listeners.add(l), () => void listeners.delete(l));
-const useAskState = () => useSyncExternalStore(subscribe, () => state);
+const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.listeners.delete(l));
+const useAskState = () => useSyncExternalStore(subscribe, current);
 
 export const setAskOpen = (open: boolean) => set({ open });
-export const openAsk = (agentId: string | null, seed: string | null = null) => set({ open: true, agentId, seed });
+// seed: text put before the draft (a quoted selection).
+export const openAsk = (agentId: string | null, seed = "") => set({ open: true, agentId, draft: seed + current().draft });
 export const quote = (text: string) => `${text.split("\n").map((l) => `> ${l}`).join("\n")}\n\n`;
 
 const FONT_MIN = 12;
@@ -50,8 +60,6 @@ export function AskModal(props: PluginHostProps) {
   ) : null;
 }
 
-// Image previews by daemon path; the daemon only gets bytes once, at upload.
-const previews = new Map<string, string>();
 
 function AskBody({ theme }: PluginHostProps) {
   const start = useRpc(askStart);
@@ -86,14 +94,9 @@ function AskBody({ theme }: PluginHostProps) {
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
   const model = agent?.model;
   const effort = agent?.effort;
-  const [draft, setDraft] = useState("");
+  const { draft } = useAskState();
+  const setDraft = (d: string) => set({ draft: d });
   const [lightbox, setLightbox] = useState<string | null>(null);
-  const { seed } = useAskState();
-  useEffect(() => {
-    if (seed === null) return;
-    setDraft((d) => seed + d);
-    set({ seed: null });
-  }, [seed]);
   const scroll = useRef<NativeScrollView>(null);
   useEffect(() => setZoom(THREAD_ID, fontSize / BASE), [fontSize]);
   // The input grows with its text up to half the window body.
@@ -103,8 +106,8 @@ function AskBody({ theme }: PluginHostProps) {
 
   async function send() {
     const text = draft.trim();
-    if ((!text && !files.length) || state.pending || uploading) return;
-    const next: Turn[] = [...state.turns, { role: "user", text, ...(files.length ? { files } : {}) }];
+    if ((!text && !files.length) || current().pending || uploading) return;
+    const next: Turn[] = [...current().turns, { role: "user", text, ...(files.length ? { files } : {}) }];
     set({ turns: next, pending: true, error: null });
     setDraft("");
     setFiles([]);
