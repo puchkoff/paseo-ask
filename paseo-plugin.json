@@ -3,8 +3,7 @@
   "media": [
     "assets/screenshot-overlay.png",
     "assets/screenshot-buttons.png",
-    "assets/screenshot.png",
-    "assets/screenshot-attachment.png"
+    "assets/screenshot-selection.png"
   ],
   "requirements": {
     "paseo": ">=0.13.0"

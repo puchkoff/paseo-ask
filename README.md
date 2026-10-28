@@ -6,11 +6,9 @@ Open it from the "Ask" row in the sidebar footer or the "Ask" button in an agent
 
 ![Ask open over the main window](assets/screenshot-overlay.png)
 
-![The Ask buttons: workspace header, composer, sidebar footer](assets/screenshot-buttons.png)
+![The Ask buttons, outlined: workspace header, agent composer, sidebar footer](assets/screenshot-buttons.png)
 
-![Ask answering with a table](assets/screenshot.png)
-
-![Ask reading an attached chart](assets/screenshot-attachment.png)
+![Ask button next to selected text](assets/screenshot-selection.png)
 
 **Runs with full access.** Each question runs `claude -p --permission-mode bypassPermissions` in your home directory on the daemon, with your Claude Code settings, skills and MCP servers: it can read and change files and run commands without asking. Questions, the thread and anything Claude reads go to Anthropic through your Claude Code login.
 
