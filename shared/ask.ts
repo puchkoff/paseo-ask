@@ -3,7 +3,17 @@ import { z } from "zod";
 
 // files: daemon paths returned by ask.upload; Claude reads them with its tools.
 export const file = z.object({ name: z.string().max(255), path: z.string().max(1000) });
-export const turn = z.object({ role: z.enum(["user", "assistant"]), text: z.string(), files: z.array(file).max(20).optional() });
+// What Claude did on the way to an answer, shown like the main chat's timeline.
+export const step = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("thinking"), text: z.string() }),
+  z.object({ kind: z.literal("tool"), id: z.string(), name: z.string(), input: z.string(), output: z.string().optional(), error: z.boolean().optional() }),
+  z.object({ kind: z.literal("text"), text: z.string() }),
+  // A message the user sent while Claude was still working (steer).
+  z.object({ kind: z.literal("steer"), text: z.string() }),
+]);
+export type Step = z.infer<typeof step>;
+// steps are display-only: the client strips them before resending the thread.
+export const turn = z.object({ role: z.enum(["user", "assistant"]), text: z.string(), files: z.array(file).max(20).optional(), steps: z.array(step).optional() });
 export type AskFile = z.infer<typeof file>;
 export type Turn = z.infer<typeof turn>;
 
@@ -29,10 +39,24 @@ export const askUpload = defineRpc({
   output: file,
 });
 
+// accepted: false once the turn has ended; send it as a new question then.
+export const askSteer = defineRpc({
+  name: "ask.steer",
+  input: z.object({ jobId: z.string(), text: z.string().min(1).max(100_000) }),
+  output: z.object({ accepted: z.boolean() }),
+});
+
 export const askPoll = defineRpc({
   name: "ask.poll",
   input: z.object({ jobId: z.string() }),
-  output: z.object({ status: z.enum(["running", "done", "error"]), answer: z.string().optional(), error: z.string().optional() }),
+  // images: data: URIs for local image paths the answer embeds, keyed by path (Markdown in the app can't read daemon files).
+  output: z.object({
+    status: z.enum(["running", "done", "error"]),
+    steps: z.array(step).optional(),
+    answer: z.string().optional(),
+    images: z.record(z.string(), z.string()).optional(),
+    error: z.string().optional(),
+  }),
 });
 
 // The agent's Claude model: providers come as "claude" (+ model) or "claude/<model>". Non-Claude → undefined.

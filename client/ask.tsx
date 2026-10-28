@@ -2,9 +2,10 @@ import { type PluginHostProps, useAgent, useRpc } from "@getpaseo/plugin/client"
 import { Markdown, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Image, Modal, Platform, Pressable, type ScrollView as NativeScrollView, Text, View } from "react-native";
-import { type AskFile, askPoll, askStart, askUpload, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
+import { type AskFile, askPoll, askStart, askSteer, askUpload, type Step, claudeEffortOf, claudeModelOf, MAX_FILE_BASE64, type Turn } from "../shared/ask.ts";
 import { mixHex } from "../shared/color.ts";
 import { autoGrow, load, onPasteFiles, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { Steps } from "./steps.tsx";
 import { FloatingWindow } from "./window.tsx";
 
 // One store for the whole app, on globalThis: each daemon with the plugin runs its own copy of this
@@ -12,20 +13,33 @@ import { FloatingWindow } from "./window.tsx";
 // another daemon's workspace. A module-level store would close the window and drop the draft then.
 // Font size is also saved per app (web/desktop only); the thread lasts until reload.
 // agentId: the agent whose composer pill opened the window; Ask uses its model.
-type State = { open: boolean; agentId: string | null; draft: string; turns: Turn[]; pending: boolean; error: string | null; fontSize: number };
+// live: steps of the answer in progress; jobId: its daemon job, for steering.
+// unread: an answer arrived while the window was closed (dot on the Ask buttons).
+type State = {
+  open: boolean;
+  agentId: string | null;
+  draft: string;
+  turns: Turn[];
+  live: Step[];
+  jobId: string | null;
+  pending: boolean;
+  unread: boolean;
+  error: string | null;
+  fontSize: number;
+};
 // Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
 const BASE = 15;
 // v2: v1 saved the old default of 20.
 const PREFS_KEY = "paseo-ask:prefs-v2";
 const prefs = load(PREFS_KEY, { fontSize: BASE });
-// v1: bump when State changes shape, so a newer copy never reads an older copy's store.
+// v3: bump when State changes shape, so a newer copy never reads an older copy's store.
 type Store = { state: State; listeners: Set<() => void>; previews: Map<string, string> };
-const g = globalThis as { __paseoAskStoreV1?: Store };
-const store = (g.__paseoAskStoreV1 ??= {
-  state: { open: false, agentId: null, draft: "", turns: [], pending: false, error: null, ...prefs },
+const g = globalThis as { __paseoAskStoreV3?: Store };
+const store = (g.__paseoAskStoreV3 ??= {
+  state: { open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs },
   listeners: new Set(),
-  // Image previews by daemon path; the daemon only gets bytes once, at upload.
+  // Image data: URIs by daemon path: attachment previews, and images answers embed.
   previews: new Map(),
 });
 const previews = store.previews;
@@ -38,9 +52,21 @@ function set(patch: Partial<State>) {
 const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.listeners.delete(l));
 const useAskState = () => useSyncExternalStore(subscribe, current);
 
-export const setAskOpen = (open: boolean) => set({ open });
+export const setAskOpen = (open: boolean) => set(open ? { open, unread: false } : { open });
 // seed: text put before the draft (a quoted selection).
-export const openAsk = (agentId: string | null, seed = "") => set({ open: true, agentId, draft: seed + current().draft });
+export const openAsk = (agentId: string | null, seed = "") => set({ open: true, unread: false, agentId, draft: seed + current().draft });
+// For the Ask buttons' icon: a spinner while answering, a dot when an unseen answer is ready.
+export const useAskBadge = () => {
+  const { pending, unread } = useAskState();
+  return pending ? "pending" : unread ? "unread" : null;
+};
+
+// Turns as resent to claude: steps are display-only, but a steer is part of the conversation.
+const forClaude = (turns: Turn[]): Turn[] =>
+  turns.map(({ role, text, files, steps }) => {
+    const steers = (steps ?? []).filter((x) => x.kind === "steer").map((x) => `"${x.text}"`);
+    return { role, files, text: steers.length ? `[While answering, the user added: ${steers.join("; ")}]\n\n${text}` : text };
+  });
 export const quote = (text: string) => `${text.split("\n").map((l) => `> ${l}`).join("\n")}\n\n`;
 
 const FONT_MIN = 12;
@@ -64,6 +90,7 @@ export function AskModal(props: PluginHostProps) {
 function AskBody({ theme }: PluginHostProps) {
   const start = useRpc(askStart);
   const poll = useRpc(askPoll);
+  const steerRpc = useRpc(askSteer);
   const upload = useRpc(askUpload);
   const [files, setFiles] = useState<AskFile[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -89,7 +116,8 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
   useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
-  const { turns, pending, error, fontSize, agentId } = useAskState();
+  const { turns, live, pending, error, fontSize, agentId } = useAskState();
+  const [scrolled, setScrolled] = useState(false);
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
   const model = agent?.model;
@@ -104,27 +132,48 @@ function AskBody({ theme }: PluginHostProps) {
   const maxInput = bodyHeight ? Math.round(bodyHeight / 2) : 160;
   useEffect(() => autoGrow(INPUT_ID, maxInput), [draft, maxInput, fontSize]);
 
-  async function send() {
+  // While an answer is in progress, Send steers it instead of queueing a new question.
+  async function steer() {
     const text = draft.trim();
-    if ((!text && !files.length) || current().pending || uploading) return;
+    const jobId = current().jobId;
+    if (!text || !jobId || uploading) return;
+    const withPaths = files.length ? `${text}\n\n[Attached files, read them with your tools:\n${files.map((f) => `- ${f.path}`).join("\n")}]` : text;
+    try {
+      const { accepted } = await steerRpc({ jobId, text: withPaths });
+      if (!accepted) return set({ error: "The answer had already finished; press Send to ask it as a new question." });
+      setDraft("");
+      setFiles([]);
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function send() {
+    if (current().pending) return steer();
+    const text = draft.trim();
+    if ((!text && !files.length) || uploading) return;
     const next: Turn[] = [...current().turns, { role: "user", text, ...(files.length ? { files } : {}) }];
     set({ turns: next, pending: true, error: null });
     setDraft("");
     setFiles([]);
     try {
-      const { jobId } = await start({ turns: next, model, effort });
+      // Steps are display-only; resend just the text and files.
+      const { jobId } = await start({ turns: forClaude(next), model, effort });
+      set({ jobId });
       for (;;) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         const job = await poll({ jobId });
+        set({ live: job.steps ?? [] });
         if (job.status === "running") continue;
         if (job.status === "error") throw new Error(job.error ?? "failed");
-        set({ turns: [...next, { role: "assistant", text: job.answer ?? "" }] });
+        for (const [p, uri] of Object.entries(job.images ?? {})) previews.set(p, uri);
+        set({ turns: [...next, { role: "assistant", text: job.answer ?? "", steps: job.steps }], unread: !current().open });
         break;
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     } finally {
-      set({ pending: false });
+      set({ pending: false, live: [], jobId: null });
     }
   }
 
@@ -175,11 +224,17 @@ function AskBody({ theme }: PluginHostProps) {
         color: c.foreground,
         fontSize,
       },
-      send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 11, opacity: pending ? 0.5 : 1 },
+      send: { backgroundColor: c.accent, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 11 },
       sendText: { color: c.accentForeground, fontSize: 15, fontWeight: "600" as const },
     }),
     [c, pending, fontSize, maxInput],
   );
+
+  // Local image paths in an answer become the data: URIs the daemon sent with it.
+  const answerText = (text: string, key: number) =>
+    text ? (
+      <Markdown key={key}>{text.replace(/(!\[[^\]]*\]\()<?([^)\s>]+)>?\)/g, (m, head: string, p: string) => (previews.has(p) ? `${head}${previews.get(p)})` : m))}</Markdown>
+    ) : null;
 
   const fileChip = (f: AskFile, onRemove?: () => void) => {
     const preview = previews.get(f.path);
@@ -223,14 +278,31 @@ function AskBody({ theme }: PluginHostProps) {
         {chip("A+", false, () => set({ fontSize: fontSize + 1 }), "Bigger text", fontSize >= FONT_MAX)}
         {turns.length > 0 && !pending ? chip("Clear", false, () => set({ turns: [], error: null }), "Clear conversation") : null}
       </View>
-      <ScrollView ref={scroll} style={s.list} onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}>
+      {/* Opens already scrolled to the end: the first scroll jumps, hidden until it lands; later ones animate. */}
+      <ScrollView
+        ref={scroll}
+        style={[s.list, scrolled ? null : { opacity: 0 }]}
+        onContentSizeChange={() => {
+          scroll.current?.scrollToEnd({ animated: scrolled });
+          if (!scrolled) setScrolled(true);
+        }}
+      >
         <View nativeID={THREAD_ID} style={s.listContent}>
-        {turns.map((t, i) => (
-          <View key={i} style={t.role === "user" ? s.user : s.bot}>
-            {t.text ? <Markdown>{t.text}</Markdown> : null}
-            {t.files?.length ? <View style={s.files}>{t.files.map((f) => fileChip(f))}</View> : null}
-          </View>
-        ))}
+        {turns.map((t, i) =>
+          t.role === "user" ? (
+            <View key={i} style={s.user}>
+              {t.text ? <Markdown>{t.text}</Markdown> : null}
+              {t.files?.length ? <View style={s.files}>{t.files.map((f) => fileChip(f))}</View> : null}
+            </View>
+          ) : (
+            <View key={i} style={[s.bot, { gap: 10 }]}>
+              {/* The last text step is the answer itself; draw it once, below the steps. */}
+              {t.steps?.length ? <Steps theme={theme} steps={t.steps.filter((st, k, all) => !(st.kind === "text" && k === all.length - 1 && st.text.trim() === t.text))} renderText={answerText} /> : null}
+              {answerText(t.text, -1)}
+            </View>
+          ),
+        )}
+        {pending && live.length ? <Steps theme={theme} steps={live} renderText={answerText} /> : null}
         {pending ? <ActivityIndicator color={c.foregroundMuted} style={{ alignSelf: "flex-start" }} /> : null}
         {error ? <Text style={s.error}>{error}</Text> : null}
         </View>
@@ -266,8 +338,8 @@ function AskBody({ theme }: PluginHostProps) {
             }
           }}
         />
-        <Pressable accessibilityRole="button" accessibilityLabel="Send question" disabled={pending} onPress={() => void send()} style={s.send}>
-          <Text style={s.sendText}>Send</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={pending ? "Steer the answer in progress" : "Send question"} onPress={() => void send()} style={s.send}>
+          <Text style={s.sendText}>{pending ? "Steer" : "Send"}</Text>
         </Pressable>
       </View>
     </View>

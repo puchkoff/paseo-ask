@@ -1,34 +1,39 @@
 import type { PluginButtonIconProps, PluginButtonRegistration, PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plugin/client";
-import { Icon, SidebarRow } from "@getpaseo/plugin/client/ui";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { useEffect } from "react";
-import { View } from "react-native";
-import { AskModal, openAsk, quote } from "./client/ask.tsx";
+import { ActivityIndicator, View } from "react-native";
+import { AskModal, openAsk, quote, useAskBadge } from "./client/ask.tsx";
 import { watchSelection } from "./client/web.ts";
 
-// The pill icon also carries an invisible paseo-ask-pill-<agentId> marker, so a text selection
-// in an agent panel can find which agent it belongs to (client/web.ts watchSelection).
-function PillIcon(props: PluginButtonIconProps) {
+// Icon of the composer pill and the header button: a spinner while an answer is in progress, a dot
+// when one arrived with the window closed. The pill's also carries an invisible
+// paseo-ask-pill-<agentId> marker, so a text selection in an agent panel can find its agent (client/web.ts).
+function AskIcon(props: PluginButtonIconProps) {
+  const badge = useAskBadge();
+  const size = props.size ?? 16;
   return (
-    <View>
-      <Icon name="MessageCircle" size={props.size} color={props.color} />
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      {badge === "pending" ? <ActivityIndicator size={size} color={props.color} /> : <Icon name="MessageCircle" size={size} color={props.color} />}
+      {badge === "unread" ? (
+        <View
+          accessibilityLabel="Answer ready"
+          style={{ position: "absolute", top: -2, right: -3, width: 8, height: 8, borderRadius: 4, backgroundColor: props.theme.colors.accent, borderWidth: 1.5, borderColor: props.theme.colors.surface0 }}
+        />
+      ) : null}
       {props.context === "agent" ? <View nativeID={`paseo-ask-pill-${props.agentId}`} style={{ position: "absolute", width: 0, height: 0 }} /> : null}
     </View>
   );
 }
 
-// The sidebar row also hosts the modal: it is always mounted, and pills have no mounted component of their own.
+// An invisible sidebar item, only to host the window and the selection watcher: it is always mounted,
+// while pills and header buttons come and go with workspaces. Hiding "Ask" in Settings → Sidebar turns both off.
 function AskItem(props: PluginSidebarItemProps) {
   const c = props.theme.colors;
   useEffect(
     () => watchSelection({ background: c.surface0, foreground: c.foreground, border: c.border }, (text, agentId) => openAsk(agentId, quote(text))),
     [c.surface0, c.foreground, c.border],
   );
-  return (
-    <>
-      <SidebarRow icon="MessageCircle" onPress={() => openAsk(null)} />
-      <AskModal {...props} />
-    </>
-  );
+  return <AskModal {...props} />;
 }
 
 export default function contribute(client: PluginClientContext) {
@@ -47,7 +52,7 @@ export default function contribute(client: PluginClientContext) {
         id: "ask",
         workspaceId: agent.workspaceId,
         agentId: agent.id,
-        button: { title: "Ask a quick question", label: "Ask", icon: PillIcon, behavior: { kind: "action", onPress: () => openAsk(agentId) } },
+        button: { title: "Ask a quick question", label: "Ask", icon: AskIcon, behavior: { kind: "action", onPress: () => openAsk(agentId) } },
       }),
     );
   };
@@ -85,7 +90,7 @@ export default function contribute(client: PluginClientContext) {
       client.addHeaderButton({
         id: "ask",
         workspaceId,
-        button: { title: "Ask a quick question", label: "Ask", icon: "MessageCircle", behavior: { kind: "action", onPress: () => openAsk(null) } },
+        button: { title: "Ask a quick question", label: "Ask", icon: AskIcon, behavior: { kind: "action", onPress: () => openAsk(null) } },
       }),
     );
   };
