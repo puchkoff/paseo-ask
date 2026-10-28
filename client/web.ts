@@ -35,7 +35,7 @@ declare const document: {
   getElementById(id: string): { style: Record<string, string>; scrollHeight: number } | null;
   createElement(tag: "input"): DomInput;
   createElement(tag: "button"): DomButton;
-  body: { appendChild(el: DomButton): void };
+  body: { appendChild(el: DomButton): void; style: Record<string, string> };
   addEventListener(type: DocEvent, fn: (e: any) => void, capture?: boolean): void;
   removeEventListener(type: DocEvent, fn: (e: any) => void, capture?: boolean): void;
 };
@@ -82,12 +82,18 @@ export function setZoom(nativeID: string, factor: number): void {
 }
 
 // Follows the mouse on window, not on the element: RN responder moves get lost inside a Modal on desktop.
+// Text selection is off meanwhile, or dragging past the window's edge selects the page under it.
 export function followPointer(start: PointerLike, onMove: (dx: number, dy: number) => void, onEnd: () => void): void {
   if (!isWeb) return;
+  const { style } = document.body;
+  const prev = style.userSelect;
+  style.userSelect = "none";
+  getSelection()?.removeAllRanges();
   const move = (e: PointerLike) => onMove(e.clientX - start.clientX, e.clientY - start.clientY);
   const up = () => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    style.userSelect = prev;
     onEnd();
   };
   window.addEventListener("pointermove", move);
