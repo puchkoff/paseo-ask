@@ -6,7 +6,7 @@ import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Ste
 import { mixHex } from "../shared/color.ts";
 import { enterAction, sendAction } from "../shared/send.ts";
 import { type Session, sessionTitle, upsertSession } from "../shared/sessions.ts";
-import { autoGrow, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { autoGrow, confirmed, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { Steps } from "./steps.tsx";
 import { FloatingWindow } from "./window.tsx";
 
@@ -196,6 +196,12 @@ function AskBody({ theme }: PluginHostProps) {
     set({ threadId: x.id, turns: x.turns, error: null });
     setHistory(false);
   };
+  // The current thread goes too, or the next set({turns}) would re-add it.
+  const clearHistory = () => {
+    if (!confirmed("Delete all past conversations?")) return;
+    set({ sessions: [], threadId: newId(), turns: [], error: null });
+    setHistory(false);
+  };
   const [scrolled, setScrolled] = useState(false);
   // Same model as the agent's main window; non-Claude agents and the sidebar fall back to the CLI default.
   const agent = useAgent(agentId ?? "", (a) => ({ model: claudeModelOf(a), effort: claudeEffortOf(a) }));
@@ -365,6 +371,11 @@ function AskBody({ theme }: PluginHostProps) {
         {chip("A−", false, () => set({ fontSize: fontSize - 1 }), "Smaller text", fontSize <= FONT_MIN)}
         {chip("A+", false, () => set({ fontSize: fontSize + 1 }), "Bigger text", fontSize >= FONT_MAX)}
         {sessions.length ? chip("History", history, () => setHistory(!history), "Past conversations", busy) : null}
+        {history ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Clear history" onPress={clearHistory} hitSlop={6} style={[s.chip, { justifyContent: "center" }]}>
+            <Icon name="Trash2" size={14} color={c.foregroundMuted} />
+          </Pressable>
+        ) : null}
         {turns.length > 0 && !busy ? chip("New", false, () => (set({ threadId: newId(), turns: [], error: null }), setHistory(false)), "New conversation") : null}
       </View>
       {history ? (

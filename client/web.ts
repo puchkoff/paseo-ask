@@ -40,6 +40,7 @@ declare const document: {
   removeEventListener(type: DocEvent, fn: (e: any) => void, capture?: boolean): void;
 };
 declare function getSelection(): DomSelection | null;
+declare function confirm(message: string): boolean;
 declare class FileReader {
   result: string | null;
   onload: (() => void) | null;
@@ -55,6 +56,9 @@ declare const window: {
 };
 
 const isWeb = Platform.OS === "web";
+
+// Native has no dialog, so it says yes.
+export const confirmed = (message: string) => !isWeb || confirm(message);
 
 export function load<T extends object>(key: string, fallback: T): T {
   if (!isWeb) return fallback;
