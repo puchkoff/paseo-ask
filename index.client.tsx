@@ -7,7 +7,7 @@ import { watchSelection } from "./client/web.ts";
 
 // Icon of the composer pill and the header button: a spinner while an answer is in progress, a dot
 // when one arrived with the window closed. The pill's also carries an invisible
-// paseo-ask-pill-<agentId> marker, so a text selection in an agent panel can find its agent (client/web.ts).
+// paseo-ask-pill-<agentId> marker, so a text selection in an agent panel can find its agent and composer (client/web.ts).
 function AskIcon(props: PluginButtonIconProps) {
   const badge = useAskBadge();
   const size = props.size ?? 16;
@@ -48,7 +48,7 @@ function AskSettings() {
 function AskItem(props: PluginSidebarItemProps) {
   const c = props.theme.colors;
   useEffect(
-    () => watchSelection({ background: c.surface0, foreground: c.foreground, border: c.border }, (text, agentId) => show(agentId, quote(text))),
+    () => watchSelection({ background: c.surface0, foreground: c.foreground, border: c.border }, quote, (text, agentId) => show(agentId, quote(text))),
     [c.surface0, c.foreground, c.border],
   );
   return <AskModal {...props} />;

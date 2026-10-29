@@ -8,6 +8,9 @@ type PasteEvent = { clipboardData: { files: DomFile[] } | null; preventDefault()
 type DomRect = { left: number; right: number; top: number; bottom: number; width: number; height: number };
 type DomEl = {
   id: string;
+  value?: string;
+  focus?(): void;
+  setSelectionRange?(start: number, end: number): void;
   isContentEditable?: boolean;
   tagName: string;
   parentElement: DomEl | null;
@@ -33,6 +36,7 @@ type DomSelection = {
 type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange" | "focusin";
 declare const document: {
   getElementById(id: string): { style: Record<string, string>; scrollHeight: number; focus(): void } | null;
+  execCommand(command: "insertText", showUi: boolean, value: string): boolean;
   createElement(tag: "input"): DomInput;
   createElement(tag: "button"): DomButton;
   body: { appendChild(el: DomButton): void; style: Record<string, string> };
@@ -145,19 +149,41 @@ export function onPasteFiles(onFiles: (files: Promise<PickedFile[]>) => void): (
 
 export type SelectionColors = { background: string; foreground: string; border: string };
 
-// A small "Ask" button under text selected anywhere in the app (not in inputs or the Ask window).
-// agentId comes from the paseo-ask-pill-<id> marker the composer pill renders in the same agent panel.
-export function watchSelection(colors: SelectionColors, onAsk: (text: string, agentId: string | null) => void): () => void {
+// The agent's composer: the nearest textarea above its paseo-ask-pill-<id> marker.
+function composerOf(marker: DomEl | null): DomEl | null {
+  for (let n = marker; n; n = n.parentElement) {
+    const t = n.querySelector("textarea");
+    if (t) return t;
+  }
+  return null;
+}
+
+// Appends to the composer as typed text: React sees the change and Ctrl+Z undoes it.
+function insertInto(input: DomEl, text: string): void {
+  const end = input.value?.length ?? 0;
+  input.focus?.();
+  input.setSelectionRange?.(end, end);
+  document.execCommand("insertText", false, (end && !input.value?.endsWith("\n") ? "\n" : "") + text);
+}
+
+// "Ask" and "Quote" buttons under text selected anywhere in the app (not in inputs or the Ask window).
+// agentId comes from the paseo-ask-pill-<id> marker the composer pill renders in the same agent panel;
+// "Quote" shows only there, and puts the quoted selection into that agent's composer.
+export function watchSelection(
+  colors: SelectionColors,
+  quote: (text: string) => string,
+  onAsk: (text: string, agentId: string | null) => void,
+): () => void {
   if (!isWeb) return () => {};
-  let button: DomButton | null = null;
+  let buttons: DomButton[] = [];
   const hide = () => {
-    button?.remove();
-    button = null;
+    for (const b of buttons) b.remove();
+    buttons = [];
   };
-  const agentOf = (el: DomEl | null): string | null => {
+  const markerOf = (el: DomEl | null): DomEl | null => {
     for (let n = el; n; n = n.parentElement) {
       const marker = n.querySelector('[id^="paseo-ask-pill-"]');
-      if (marker) return marker.id.slice("paseo-ask-pill-".length);
+      if (marker) return marker;
     }
     return null;
   };
@@ -170,41 +196,53 @@ export function watchSelection(colors: SelectionColors, onAsk: (text: string, ag
     const node = range.commonAncestorContainer;
     const el = (node.tagName ? node : node.parentElement) as DomEl | null;
     if (!el || el.closest("input, textarea, [contenteditable=true], #paseo-ask-window")) return;
-    // Last line box = where the selection ends; the button sits just below its right end.
+    // Last line box = where the selection ends; the buttons sit just below its right end.
     const rects = Array.from(range.getClientRects()).filter((x) => x.width || x.height);
     const r = rects[rects.length - 1] ?? range.getBoundingClientRect();
     if (!r.width && !r.height) return;
-    const agentId = agentOf(el);
-    const b = document.createElement("button");
-    b.textContent = "Ask";
-    b.setAttribute("aria-label", "Ask about the selection");
-    Object.assign(b.style, {
-      position: "fixed",
-      left: `${r.right + 2}px`,
-      top: `${r.bottom + 4}px`,
-      zIndex: "2147483647",
-      padding: "7px 16px",
-      borderRadius: "999px",
-      border: `1px solid ${colors.border}`,
-      background: colors.background,
-      color: colors.foreground,
-      font: "500 15px system-ui, sans-serif",
-      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-      cursor: "pointer",
-    });
-    // mousedown would clear the selection before click reads it.
-    b.addEventListener("mousedown", (e) => e.preventDefault());
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      hide();
-      getSelection()?.removeAllRanges();
-      onAsk(text, agentId);
-    });
-    document.body.appendChild(b);
-    // Keep it on screen: pull it in from the right edge, and put it above the end when there's no room below.
-    b.style.left = `${Math.max(8, Math.min(r.right + 2, innerWidth - b.offsetWidth - 8))}px`;
-    if (r.bottom + 4 + b.offsetHeight > innerHeight - 8) b.style.top = `${Math.max(8, r.top - b.offsetHeight - 4)}px`;
-    button = b;
+    const marker = markerOf(el);
+    const agentId = marker ? marker.id.slice("paseo-ask-pill-".length) : null;
+    const composer = composerOf(marker);
+    const add = (label: string, aria: string, onClick: () => void) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.setAttribute("aria-label", aria);
+      Object.assign(b.style, {
+        position: "fixed",
+        zIndex: "2147483647",
+        padding: "7px 16px",
+        borderRadius: "999px",
+        border: `1px solid ${colors.border}`,
+        background: colors.background,
+        color: colors.foreground,
+        font: "500 15px system-ui, sans-serif",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+        cursor: "pointer",
+      });
+      // mousedown would clear the selection before click reads it.
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        hide();
+        getSelection()?.removeAllRanges();
+        onClick();
+      });
+      document.body.appendChild(b);
+      buttons.push(b);
+    };
+    add("Ask", "Ask about the selection", () => onAsk(text, agentId));
+    if (composer) add("Quote", "Quote the selection in the agent's message", () => insertInto(composer, quote(text)));
+    // Keep them on screen: pull in from the right edge, and put them above the end when there's no room below.
+    const gap = 6;
+    const width = buttons.reduce((w, b) => w + b.offsetWidth, gap * (buttons.length - 1));
+    const height = buttons[0].offsetHeight;
+    let left = Math.max(8, Math.min(r.right + 2, innerWidth - width - 8));
+    const top = r.bottom + 4 + height > innerHeight - 8 ? Math.max(8, r.top - height - 4) : r.bottom + 4;
+    for (const b of buttons) {
+      b.style.left = `${left}px`;
+      b.style.top = `${top}px`;
+      left += b.offsetWidth + gap;
+    }
   };
   // After mouseup the selection is final; defer one tick so a click that clears it is seen.
   const onUp = () => setTimeout(show, 0);
