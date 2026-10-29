@@ -6,9 +6,9 @@ import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Ste
 import { mixHex } from "../shared/color.ts";
 import { enterAction, sendAction } from "../shared/send.ts";
 import { type Session, sessionTitle, upsertSession } from "../shared/sessions.ts";
-import { autoGrow, confirmed, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { autoGrow, confirmed, focusById, keepFocus, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { Steps } from "./steps.tsx";
-import { FloatingWindow } from "./window.tsx";
+import { BACKDROP_ID, FloatingWindow } from "./window.tsx";
 
 // One store for the whole app, on globalThis: each daemon with the plugin runs its own copy of this
 // module, and the sidebar row hosting the window switches copies when the main window moves to
@@ -131,6 +131,7 @@ const INPUT_ID = "paseo-ask-input";
 // Own window everywhere: the host Modal's header is too tall on phones and its desktop size is fixed.
 export function AskModal(props: PluginHostProps) {
   const { open } = useAskState();
+  useEffect(() => (open ? keepFocus(BACKDROP_ID, INPUT_ID) : undefined), [open]);
   return open ? (
     <FloatingWindow theme={props.theme} compact={props.layout.compact} title="Ask" onClose={() => setAskOpen(false)} onEscape={escapeAsk}>
       <AskBody {...props} />
@@ -377,7 +378,7 @@ function AskBody({ theme }: PluginHostProps) {
             <Icon name="Trash2" size={14} color={c.foregroundMuted} />
           </Pressable>
         ) : null}
-        {turns.length > 0 && !busy ? chip("New", false, () => (set({ threadId: newId(), turns: [], error: null }), setHistory(false)), "New conversation") : null}
+        {turns.length > 0 && !busy ? chip("New", false, () => (set({ threadId: newId(), turns: [], error: null }), setHistory(false), focusById(INPUT_ID)), "New conversation") : null}
       </View>
       {history ? (
         <ScrollView style={s.list}>

@@ -6,6 +6,7 @@ import { followPointer, load, save } from "./web.ts";
 
 type Rect = { x: number; y: number; w: number; h: number };
 const KEY = "paseo-ask:rect";
+export const BACKDROP_ID = "paseo-ask-backdrop";
 const MIN_W = 360;
 const MIN_H = 300;
 
@@ -79,7 +80,7 @@ function DesktopWindow({ theme, title, onClose, onEscape, children }: Props) {
     <Modal transparent visible onRequestClose={onEscape}>
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)" }}>
         {/* A click outside the window closes it; the answer keeps going. */}
-        <Pressable accessibilityLabel="Close Ask" onPress={onClose} style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }} />
+        <Pressable nativeID={BACKDROP_ID} accessibilityLabel="Close Ask" onPress={onClose} style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0 }} />
         <View
           nativeID="paseo-ask-window"
           style={{

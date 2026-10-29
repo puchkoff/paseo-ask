@@ -30,9 +30,9 @@ type DomSelection = {
   getRangeAt(i: number): { getBoundingClientRect(): DomRect; getClientRects(): ArrayLike<DomRect>; commonAncestorContainer: { parentElement: DomEl | null } & Partial<DomEl> };
   removeAllRanges(): void;
 };
-type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange";
+type DocEvent = "paste" | "mouseup" | "keyup" | "keydown" | "scroll" | "selectionchange" | "focusin";
 declare const document: {
-  getElementById(id: string): { style: Record<string, string>; scrollHeight: number } | null;
+  getElementById(id: string): { style: Record<string, string>; scrollHeight: number; focus(): void } | null;
   createElement(tag: "input"): DomInput;
   createElement(tag: "button"): DomButton;
   body: { appendChild(el: DomButton): void; style: Record<string, string> };
@@ -246,4 +246,17 @@ export function sendSettings(): SendSettings {
     sendBehavior: s.sendBehavior === "queue" || s.sendBehavior === "interrupt" ? s.sendBehavior : fallback.sendBehavior,
     sendShortcut: s.sendShortcut === "mod-enter" ? "mod-enter" : fallback.sendShortcut,
   };
+}
+
+export const focusById = (id: string) => void (isWeb && document.getElementById(id)?.focus());
+
+// The Modal focus trap (react-native-web ModalFocusTrap) sends focus that left the window, e.g. to the
+// app's composer, to the modal's first focusable: the backdrop. Moves it on to the input.
+export function keepFocus(backdropId: string, inputId: string): () => void {
+  if (!isWeb) return () => {};
+  const handler = (e: { target: { id?: string } | null }) => {
+    if (e.target?.id === backdropId) focusById(inputId);
+  };
+  document.addEventListener("focusin", handler, true);
+  return () => document.removeEventListener("focusin", handler, true);
 }
