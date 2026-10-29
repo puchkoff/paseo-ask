@@ -314,7 +314,8 @@ function AskBody({ theme }: PluginHostProps) {
       error: { color: c.statusDanger, fontSize: small },
       hint: { color: c.foregroundMuted, fontSize: small },
       box: { borderWidth: 1, borderColor: c.border, borderRadius: 16, backgroundColor: c.surface1, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, gap: 6 },
-      input: { minHeight: 24, maxHeight: maxInput, padding: 0, color: c.foreground, fontSize, outlineStyle: "none" } as unknown as TextStyle,
+      // A bit bigger than the thread: easier to read while typing.
+      input: { minHeight: 24, maxHeight: maxInput, padding: 0, color: c.foreground, fontSize: fontSize + 2, outlineStyle: "none" } as unknown as TextStyle,
       boxBar: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8, minHeight: 28 },
       // Paseo's composer buttons: 28 px circles, accent Send with an up arrow, red Stop with a white square.
       sendButton: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.accent, alignItems: "center" as const, justifyContent: "center" as const },
