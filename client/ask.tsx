@@ -15,7 +15,7 @@ import { FloatingWindow } from "./window.tsx";
 // another daemon's workspace. A module-level store would close the window and drop the draft then.
 // Font size and the thread are also saved per app (web/desktop only).
 // threadId: the daemon keeps one claude per thread id (server/ask.ts createAsk).
-// agentId: the agent whose composer pill opened the window; Ask uses its model.
+// agentId: the agent whose composer pill opened the window; Ask uses its model and sees its chat.
 // live: steps of the answer in progress; jobId: its daemon job, for steering.
 // unread: an answer arrived while the window was closed (dot on the Ask buttons).
 // queued: questions sent with the "queue" behavior, asked one by one after the current answer.
@@ -262,7 +262,7 @@ function AskBody({ theme }: PluginHostProps) {
     set({ turns: next, pending: true, error: null });
     try {
       // Steps are display-only; resend just the text and files.
-      const { jobId } = await start({ threadId: current().threadId, turns: forClaude(next), model, effort });
+      const { jobId } = await start({ threadId: current().threadId, agentId: current().agentId ?? undefined, turns: forClaude(next), model, effort });
       set({ jobId });
       const job = await pollUntilDone(() => poll({ jobId }), (j) => set({ live: j.steps ?? [] }));
       if (job.status === "error") throw new Error(job.error ?? "failed");

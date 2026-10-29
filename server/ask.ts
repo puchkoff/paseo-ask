@@ -109,7 +109,8 @@ const userMessage = (text: string) => `${JSON.stringify({ type: "user", message:
 
 // control.steer is set while the turn runs; control.stop ends it.
 export type Control = { steer?: (text: string) => boolean; stop?: () => void };
-export type AskInput = { threadId?: string; turns: Turn[]; model?: string; effort?: Effort };
+// context: the parent agent's chat (shared/context.ts), before the question.
+export type AskInput = { threadId?: string; turns: Turn[]; model?: string; effort?: Effort; context?: string };
 export type Answer = { answer: string; images: Record<string, string>; stopped: boolean };
 
 // An idle thread keeps its claude this long, so a follow-up sees earlier tool results.
@@ -206,7 +207,7 @@ export function createAsk(run: RunLines, claude: string) {
     if (p.job) finish(p, p.job, error);
   };
 
-  function ask({ threadId, turns, model, effort }: AskInput, steps: Step[] = [], control: Control = {}): Promise<Answer> {
+  function ask({ threadId, turns, model, effort, context = "" }: AskInput, steps: Step[] = [], control: Control = {}): Promise<Answer> {
     return new Promise((resolve) => {
       const key = `${model ?? ""}|${effort ?? ""}`;
       const old = threadId ? threads.get(threadId) : undefined;
@@ -239,11 +240,11 @@ export function createAsk(run: RunLines, claude: string) {
       };
       if (reuse) {
         clearTimeout(p.idle);
-        p.io?.write(userMessage(withFiles(turns[turns.length - 1])));
+        p.io?.write(userMessage(context + withFiles(turns[turns.length - 1])));
         return;
       }
       if (keep) threads.set(keep, p);
-      launch(p, model, effort, userMessage(transcript(turns)));
+      launch(p, model, effort, userMessage(context + transcript(turns)));
     });
   }
 

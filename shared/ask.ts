@@ -35,7 +35,7 @@ export type Effort = (typeof EFFORTS)[number];
 // threadId: lets the daemon keep one claude per thread (server/ask.ts createAsk).
 export const askStart = defineRpc({
   name: "ask.start",
-  input: z.object({ threadId: z.string().max(100).optional(), turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
+  input: z.object({ threadId: z.string().max(100).optional(), agentId: z.string().max(100).optional(), turns: z.array(turn).min(1).max(100), model: model.optional(), effort: z.enum(EFFORTS).optional() }),
   output: z.object({ jobId: z.string() }),
 });
 
