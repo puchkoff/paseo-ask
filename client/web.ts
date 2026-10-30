@@ -166,13 +166,14 @@ function insertInto(input: DomEl, text: string): void {
   document.execCommand("insertText", false, (end && !input.value?.endsWith("\n") ? "\n" : "") + text);
 }
 
-// "Ask" and "Quote" buttons under text selected anywhere in the app (not in inputs or the Ask window).
+// "Ask", "Ask in new chat" and "Quote" buttons under text selected anywhere in the app (not in inputs or the Ask window).
 // agentId comes from the paseo-ask-pill-<id> marker the composer pill renders in the same agent panel;
-// "Quote" shows only there, and puts the quoted selection into that agent's composer.
+// "Ask in new chat" and "Quote" show only there; Quote puts the quoted selection into that agent's composer.
 export function watchSelection(
   colors: SelectionColors,
   quote: (text: string) => string,
   onAsk: (text: string, agentId: string | null) => void,
+  onNewChat: (text: string, agentId: string) => void,
 ): () => void {
   if (!isWeb) return () => {};
   let buttons: DomButton[] = [];
@@ -231,6 +232,7 @@ export function watchSelection(
       buttons.push(b);
     };
     add("Ask", "Ask about the selection", () => onAsk(text, agentId));
+    if (agentId) add("Ask in new chat", "Ask about the selection in a new chat forked from this agent", () => onNewChat(text, agentId));
     if (composer) add("Quote", "Quote the selection in the agent's message", () => insertInto(composer, quote(text)));
     // Keep them on screen: pull in from the right edge, and put them above the end when there's no room below.
     const gap = 6;

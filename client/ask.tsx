@@ -22,6 +22,7 @@ import { BACKDROP_ID, FloatingWindow } from "./window.tsx";
 // send: a question to ask as soon as a window or panel is mounted (/btw).
 // sessions: the last 100 threads, newest first, the current one included once it has turns.
 // mode: where Ask opens, the side panel or the floating window (Settings → Ask).
+// fork: set by "Ask in new chat"; Send hands the draft to it (a forked Paseo agent) instead of asking here.
 type Queued = { text: string; files: AskFile[] };
 export type AskMode = "side" | "popup";
 type State = {
@@ -40,6 +41,7 @@ type State = {
   unread: boolean;
   error: string | null;
   fontSize: number;
+  fork: ((question: string) => Promise<void>) | null;
 };
 // Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
@@ -60,7 +62,7 @@ const THREAD_KEY = "paseo-ask:thread";
 const SESSIONS_KEY = "paseo-ask:sessions";
 const MAX_SAVED_TURNS = 60;
 const saved = load(SESSIONS_KEY, { sessions: [] as Session[] }).sessions;
-const DEFAULTS: State = { threadId: newId(), send: null, sessions: saved, queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, ...prefs };
+const DEFAULTS: State = { threadId: newId(), send: null, sessions: saved, queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, fork: null, ...prefs };
 // One key for every plugin version: a deploy reloads the plugin and must keep the open window
 // and the thread (an answer still running dies with the daemon side). New fields get their defaults;
 // never rename this key.
@@ -98,7 +100,7 @@ function set(patch: Partial<State>) {
 const subscribe = (l: () => void) => (store.listeners.add(l), () => void store.listeners.delete(l));
 const useAskState = () => useSyncExternalStore(subscribe, current);
 
-export const setAskOpen = (open: boolean) => set(open ? { open, unread: false } : { open });
+export const setAskOpen = (open: boolean) => set(open ? { open, unread: false } : { open, fork: null });
 export const askMode = () => current().mode;
 export const setAskMode = (mode: AskMode) => set({ mode });
 export const useAskMode = () => useAskState().mode;
@@ -107,7 +109,14 @@ export const escapeAsk = () => (current().pending && store.stop ? store.stop() :
 // seed: text put before the draft (a quoted selection). send: asked right away (/btw).
 // popup: false when the side panel shows it instead of the floating window.
 export const openAsk = (agentId: string | null, seed = "", send = "", popup = true) =>
-  set({ ...(popup ? { open: true } : {}), unread: false, agentId, draft: seed + current().draft, ...(send ? { send: { text: send, files: [] } } : {}) });
+  set({ ...(popup ? { open: true } : {}), unread: false, agentId, fork: null, draft: seed + current().draft, ...(send ? { send: { text: send, files: [] } } : {}) });
+// A selected text: a new conversation in the floating window, its draft just the quote. While an answer
+// runs the thread and draft stay, since the answer is written into whichever thread is current when it lands.
+export const openAskNew = (agentId: string | null, seed: string, fork: State["fork"] = null) => {
+  const busy = current().pending || current().queued.length > 0;
+  set({ ...(busy ? { draft: seed + current().draft } : { threadId: newId(), turns: [], draft: seed }), open: true, unread: false, error: null, agentId, fork });
+  focusById(INPUT_ID);
+};
 // For the Ask buttons' icon: a spinner while answering, a dot when an unseen answer is ready.
 export const useAskBadge = () => {
   const { pending, unread } = useAskState();
@@ -182,7 +191,7 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
   useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
-  const { turns, live, queued, pending, error, fontSize, agentId, send, sessions, threadId } = useAskState();
+  const { turns, live, queued, pending, error, fontSize, agentId, send, sessions, threadId, fork } = useAskState();
   const [history, setHistory] = useState(false);
   // /btw: the first mounted window or panel asks it; others see send already taken.
   useEffect(() => {
@@ -228,9 +237,27 @@ function AskBody({ theme }: PluginHostProps) {
   });
 
   // Send and its alternate act like Paseo's composer: see shared/send.ts.
+  const [forking, setForking] = useState(false);
   async function submit(alternate: boolean) {
     const text = draft.trim();
     if ((!text && !files.length) || uploading) return;
+    const fork = current().fork;
+    if (fork) {
+      if (forking) return;
+      setForking(true);
+      try {
+        // The new agent runs on the same daemon, so it can read the uploaded files by path.
+        await fork([text, ...files.map((f) => `Attached file: ${f.path}`)].filter(Boolean).join("\n\n"));
+        setDraft("");
+        setFiles([]);
+        setAskOpen(false);
+      } catch (err) {
+        set({ error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        setForking(false);
+      }
+      return;
+    }
     const action = sendAction(current().pending, sendSettings().sendBehavior, alternate);
     const sent = files;
     if (action === "ask") {
@@ -366,6 +393,12 @@ function AskBody({ theme }: PluginHostProps) {
             <Image source={{ uri: lightbox }} style={s.lightboxImage} resizeMode="contain" />
           </Pressable>
         </Modal>
+      ) : null}
+      {fork ? (
+        <View style={s.bar}>
+          <Text style={[s.link, { flex: 1 }]}>Send starts a new chat in this workspace, forked from the agent's history.</Text>
+          {forking ? <ActivityIndicator size="small" color={c.foregroundMuted} /> : chip("Ask here", false, () => set({ fork: null }), "Ask here instead of a new chat")}
+        </View>
       ) : null}
       <View style={s.bar}>
         <Text style={s.link}>{[model ?? "default model", effort].filter(Boolean).join(" · ")}</Text>

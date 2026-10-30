@@ -1,8 +1,9 @@
-import type { PluginButtonIconProps, PluginButtonRegistration, PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plugin/client";
+import type { PluginButtonIconProps, PluginButtonRegistration, PluginClientContext, PluginScreenProps, PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { Icon, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
 import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
-import { type AskMode, AskModal, AskPanel, askMode, openAsk, quote, setAskMode, useAskBadge, useAskMode } from "./client/ask.tsx";
+import { type AskMode, AskModal, AskPanel, askMode, openAsk, openAskNew, quote, setAskMode, useAskBadge, useAskMode } from "./client/ask.tsx";
+import { forkHistory } from "./shared/context.ts";
 import { watchSelection } from "./client/web.ts";
 
 // Icon of the composer pill and the header button: a spinner while an answer is in progress, a dot
@@ -48,7 +49,13 @@ function AskSettings() {
 function AskItem(props: PluginSidebarItemProps) {
   const c = props.theme.colors;
   useEffect(
-    () => watchSelection({ background: c.surface0, foreground: c.foreground, border: c.border }, quote, (text, agentId) => show(agentId, quote(text))),
+    () =>
+      watchSelection(
+        { background: c.surface0, foreground: c.foreground, border: c.border },
+        quote,
+        (text, agentId) => openAskNew(agentId, quote(text)),
+        (text, agentId) => openAskNew(agentId, quote(text), (question) => fork(agentId, question)),
+      ),
     [c.surface0, c.foreground, c.border],
   );
   return <AskModal {...props} />;
@@ -57,6 +64,16 @@ function AskItem(props: PluginSidebarItemProps) {
 // Set by contribute: opens Ask where Settings → Ask says. The side panel needs a workspace;
 // without one (a selection outside an agent) it falls back to the window.
 let show: (agentId: string | null, seed?: string, send?: string, workspaceId?: string | null) => void = (agentId, seed) => openAsk(agentId, seed);
+// Set by contribute: a new agent in agentId's workspace, with its chat history (like Paseo's Fork), asked question.
+let fork: (agentId: string, question: string) => Promise<void> = async () => {};
+
+// Opened by fork only to reach navigation, which sidebar items don't get; goes straight on to the agent.
+function OpenAgent({ params, navigation }: PluginScreenProps) {
+  useEffect(() => {
+    if (params.agentId) navigation?.openAgent({ agentId: params.agentId });
+  }, [params.agentId]);
+  return <ActivityIndicator style={{ flex: 1 }} />;
+}
 
 export default function contribute(client: PluginClientContext) {
   // Workspace of each agent, for a selection in an agent panel.
@@ -66,6 +83,24 @@ export default function contribute(client: PluginClientContext) {
     openAsk(agentId, seed, send, !side);
     if (side && workspaceId) client.openPanel("ask", { workspaceId, location: "explorer" });
   };
+  fork = async (agentId, question) => {
+    const t = await client.paseo.agents.ref(agentId).timeline.refetch({ direction: "tail", limit: 1000, projection: "canonical" });
+    const a = t.agent;
+    const model = a?.model ?? a?.runtimeInfo?.model;
+    if (!a?.workspaceId || !model) throw new Error("Can't fork: the agent's workspace or model is unknown");
+    const created = await client.paseo.workspaces.ref(a.workspaceId).agents.create({
+      config: {
+        provider: `${a.provider}/${model}`,
+        modeId: a.currentModeId ?? undefined,
+        thinkingOptionId: a.thinkingOptionId ?? undefined,
+        featureValues: Object.fromEntries((a.features ?? []).map((f) => [f.id, f.value])),
+      },
+      prompt: question,
+      attachments: [{ type: "text", mimeType: "text/plain", contextKind: "chat_history", title: "Chat history", text: forkHistory(t.entries, a.title, a.cwd) }],
+    });
+    client.openScreen({ screenId: "open-agent", params: { agentId: created.id } });
+  };
+  client.addScreen({ id: "open-agent", title: "Opening chat", Component: OpenAgent });
   client.addSidebarFooterItem({ id: "ask", title: "Ask", Component: AskItem });
   client.addWorkspacePanel({ id: "ask", title: "Ask", icon: "MessageCircle", locations: ["explorer", "workspace"], Component: AskPanel });
   client.addSettingsScreen({ id: "ask", title: "Ask", icon: "MessageCircle", Component: AskSettings });
