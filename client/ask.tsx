@@ -6,7 +6,7 @@ import { type AskFile, askPoll, askStart, askSteer, askStop, askUpload, type Ste
 import { mixHex } from "../shared/color.ts";
 import { enterAction, sendAction } from "../shared/send.ts";
 import { type Session, sessionTitle, upsertSession } from "../shared/sessions.ts";
-import { autoGrow, confirmed, focusById, keepFocus, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
+import { autoGrow, confirmed, focusById, focusEnd, keepFocus, load, onPasteFiles, sendSettings, type PickedFile, pickFiles, save, setZoom } from "./web.ts";
 import { Steps } from "./steps.tsx";
 import { BACKDROP_ID, FloatingWindow } from "./window.tsx";
 
@@ -23,6 +23,7 @@ import { BACKDROP_ID, FloatingWindow } from "./window.tsx";
 // sessions: the last 100 threads, newest first, the current one included once it has turns.
 // mode: where Ask opens, the side panel or the floating window (Settings → Ask).
 // fork: set by "Ask in new chat"; Send hands the draft to it (a forked Paseo agent) instead of asking here.
+// seeded: bumped when a selection fills the draft, so the window puts the caret after the quote.
 type Queued = { text: string; files: AskFile[] };
 export type AskMode = "side" | "popup";
 type State = {
@@ -42,6 +43,7 @@ type State = {
   error: string | null;
   fontSize: number;
   fork: ((question: string) => Promise<void>) | null;
+  seeded: number;
 };
 // Host Markdown draws at the app's content size (15) and takes no font size, so the thread is
 // zoomed by fontSize / BASE (desktop only). fontSize = BASE matches the main chat exactly.
@@ -62,7 +64,7 @@ const THREAD_KEY = "paseo-ask:thread";
 const SESSIONS_KEY = "paseo-ask:sessions";
 const MAX_SAVED_TURNS = 60;
 const saved = load(SESSIONS_KEY, { sessions: [] as Session[] }).sessions;
-const DEFAULTS: State = { threadId: newId(), send: null, sessions: saved, queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, fork: null, ...prefs };
+const DEFAULTS: State = { threadId: newId(), send: null, sessions: saved, queued: [], open: false, agentId: null, draft: "", turns: [], live: [], jobId: null, pending: false, unread: false, error: null, fork: null, seeded: 0, ...prefs };
 // One key for every plugin version: a deploy reloads the plugin and must keep the open window
 // and the thread (an answer still running dies with the daemon side). New fields get their defaults;
 // never rename this key.
@@ -114,8 +116,7 @@ export const openAsk = (agentId: string | null, seed = "", send = "", popup = tr
 // runs the thread and draft stay, since the answer is written into whichever thread is current when it lands.
 export const openAskNew = (agentId: string | null, seed: string, fork: State["fork"] = null) => {
   const busy = current().pending || current().queued.length > 0;
-  set({ ...(busy ? { draft: seed + current().draft } : { threadId: newId(), turns: [], draft: seed }), open: true, unread: false, error: null, agentId, fork });
-  focusById(INPUT_ID);
+  set({ ...(busy ? { draft: seed + current().draft } : { threadId: newId(), turns: [], draft: seed }), open: true, unread: false, error: null, agentId, fork, seeded: current().seeded + 1 });
 };
 // For the Ask buttons' icon: a spinner while answering, a dot when an unseen answer is ready.
 export const useAskBadge = () => {
@@ -191,7 +192,9 @@ function AskBody({ theme }: PluginHostProps) {
     }
   }
   useEffect(() => onPasteFiles((picked) => void attach(picked)), []);
-  const { turns, live, queued, pending, error, fontSize, agentId, send, sessions, threadId, fork } = useAskState();
+  const { turns, live, queued, pending, error, fontSize, agentId, send, sessions, threadId, fork, seeded } = useAskState();
+  // After the input's own autoFocus (child effects run first), and again when an open window gets a new quote.
+  useEffect(() => void (seeded && focusEnd(INPUT_ID)), [seeded]);
   const [history, setHistory] = useState(false);
   // /btw: the first mounted window or panel asks it; others see send already taken.
   useEffect(() => {

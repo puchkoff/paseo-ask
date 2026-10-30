@@ -290,6 +290,14 @@ export function sendSettings(): SendSettings {
 
 export const focusById = (id: string) => void (isWeb && document.getElementById(id)?.focus());
 
+// Focus with the caret after the text: a focused textarea otherwise puts it at the start.
+export function focusEnd(id: string): void {
+  const el = isWeb ? (document.getElementById(id) as unknown as DomEl | null) : null;
+  const end = el?.value?.length ?? 0;
+  el?.focus?.();
+  el?.setSelectionRange?.(end, end);
+}
+
 // The Modal focus trap (react-native-web ModalFocusTrap) sends focus that left the window, e.g. to the
 // app's composer, to the modal's first focusable: the backdrop. Moves it on to the input.
 export function keepFocus(backdropId: string, inputId: string): () => void {
