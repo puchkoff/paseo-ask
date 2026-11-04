@@ -14,7 +14,7 @@ Ask opens as a floating window or as a tab in the right-hand panel (Settings →
 
 ![The Ask buttons, outlined: workspace header and agent composer](assets/screenshot-buttons.png)
 
-![The Ask button at the end of a text selection, outlined](assets/screenshot-selection.png)
+![The Ask, Quote and Ask in new chat buttons on a text selection, outlined](assets/screenshot-selection.png)
 
 **Runs with full access.** Each thread runs `claude -p --permission-mode bypassPermissions` in your home directory on the daemon, with your Claude Code settings, skills and MCP servers. It can read and change files and run commands without asking. Quoted text can carry instructions, for example from a web page an agent read, and Claude may follow them. Your questions and everything Claude reads go to Anthropic through your Claude Code login.
 
