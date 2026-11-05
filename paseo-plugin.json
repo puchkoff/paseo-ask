@@ -1,5 +1,8 @@
 {
   "id": "paseo-ask",
+  "name": "Ask",
+  "description": "A floating window for quick questions and /btw, answered by Claude on the daemon.",
+  "icon": "assets/icon.png",
   "media": [
     "assets/screenshot-overlay.png",
     "assets/screenshot-buttons.png",
@@ -7,7 +10,5 @@
   ],
   "requirements": {
     "paseo": ">=0.13.0"
-  },
-  "name": "Ask",
-  "description": "A floating window for quick questions and /btw, answered by Claude on the daemon."
+  }
 }

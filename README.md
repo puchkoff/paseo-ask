@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="96" alt="Ask logo"></p>
+
 # Ask — a Paseo plugin
 
 ![Ask: Paseo plugin screen (illustration)](docs/hero.svg)
